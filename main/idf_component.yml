@@ -1,0 +1,10 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/nvs_flash: "*"
+  espressif/app_update: "*"
+  espressif/esp_https_ota: "*"
+  espressif/esp_http_client: "*"
+  espressif/esp_wifi: "*"
+  espressif/esp_event: "*"
+  espressif/freertos: "*"
+  espressif/json: "*"
