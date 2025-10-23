@@ -21,36 +21,29 @@ jobs:
         target: esp32
         path: ./
 
-    - name: Generate version file
+    - name: Prepare firmware package
       run: |
+        # Create output directory
+        mkdir -p firmware-output
+        
+        # Copy ALL binary files recursively
+        find build/ -name "*.bin" -exec cp {} firmware-output/ \;
+        
+        # Rename the main application file to firmware.bin
+        # Look for the largest .bin file (usually the main firmware)
+        LARGEST_FILE=$(find firmware-output/ -name "*.bin" -exec du -b {} \; | sort -nr | head -1 | cut -f2)
+        if [ -n "$LARGEST_FILE" ] && [ "$LARGEST_FILE" != "firmware-output/bootloader.bin" ] && [ "$LARGEST_FILE" != "firmware-output/partition-table.bin" ]; then
+          mv "$LARGEST_FILE" firmware-output/firmware.bin
+        fi
+        
+        # Generate version info
         echo '{
           "version": "${{ github.sha }}",
           "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
           "url": "https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin"
-        }' > version.json
-
-    - name: List all generated files
-      run: |
-        echo "=== All files in build directory ==="
-        find build/ -name "*.bin" -type f
-        echo "=== Binary files details ==="
-        ls -la build/*.bin 2>/dev/null || echo "No .bin files in build root"
-        ls -la build/bootloader/*.bin 2>/dev/null || echo "No bootloader files"
-        ls -la build/partition_table/*.bin 2>/dev/null || echo "No partition table files"
-
-    - name: Copy and rename firmware files
-      run: |
-        mkdir -p firmware-output
-        # Copy main application firmware
-        cp build/esp32-auto-ota.bin firmware-output/firmware.bin
-        # Copy bootloader
-        cp build/bootloader/bootloader.bin firmware-output/
-        # Copy partition table
-        cp build/partition_table/partition-table.bin firmware-output/
-        # Copy version info
-        cp version.json firmware-output/
+        }' > firmware-output/version.json
         
-        echo "=== Files ready for upload ==="
+        echo "=== Final files ==="
         ls -la firmware-output/
 
     - name: Upload firmware artifacts
@@ -61,11 +54,3 @@ jobs:
           firmware-output/*.bin
           firmware-output/version.json
         retention-days: 30
-
-    - name: Create Release
-      if: github.event_name == 'release'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          firmware-output/*.bin
-          firmware-output/version.json
