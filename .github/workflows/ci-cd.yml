@@ -1,0 +1,98 @@
+name: 🚀 ESP32 Auto-OTA Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  release:
+    types: [published]
+  workflow_dispatch:  # Manual trigger
+
+env:
+  REPOSITORY_NAME: esp32-auto-ota
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: 🐳 Build firmware using Docker
+      run: |
+        docker build -t esp32-builder .
+        mkdir -p build-output
+        docker run --rm \
+          -v $(pwd)/build-output:/output \
+          -e GITHUB_REPOSITORY=${{ github.repository }} \
+          esp32-builder
+
+    - name: 📋 List generated files
+      run: |
+        echo "Generated files:"
+        ls -la build-output/
+        echo "Version info:"
+        cat build-output/version.json
+
+    - name: 💾 Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-build
+        path: |
+          build-output/*.bin
+          build-output/version.json
+        retention-days: 30
+
+  release-firmware:
+    runs-on: ubuntu-latest
+    needs: build-firmware
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: 📥 Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-build
+
+    - name: 🏷️ Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          *.bin
+          version.json
+        body: |
+          Automated ESP32 Firmware Release
+          
+          - Build Date: ${{ fromJSON(contents('version.json')).build_date }}
+          - Commit: ${{ github.sha }}
+          - Version: ${{ fromJSON(contents('version.json')).version }}
+          
+          Flash the firmware.bin to your ESP32 for OTA updates.
+        draft: false
+        prerelease: false
+
+    - name: 📢 Notify success
+      run: |
+        echo "✅ Firmware released successfully!"
+        echo "📱 ESP32 devices will automatically detect and install this update"
+
+  test-build:
+    runs-on: ubuntu-latest
+    needs: build-firmware
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: 📥 Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-build
+
+    - name: ✅ Verify build
+      run: |
+        echo "Verifying firmware build..."
+        [ -f firmware.bin ] && echo "✅ firmware.bin exists" || echo "❌ firmware.bin missing"
+        [ -f version.json ] && echo "✅ version.json exists" || echo "❌ version.json missing"
+        echo "Version info:"
+        cat version.json
