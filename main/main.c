@@ -26,7 +26,7 @@
 #define FIRMWARE_VERSION "1.0.0"
 
 // GitHub URLs - Use direct firmware URL for simplicity
-#define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+#define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/download/" FIRMWARE_VERSION "/firmware.bin"
 
 static const char *TAG = "OTA_APP";
 
@@ -211,3 +211,4 @@ void app_main(void) {
         }
     }
 }
+
