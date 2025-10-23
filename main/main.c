@@ -12,7 +12,6 @@
 #include "esp_https_ota.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
-#include "cJSON.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -26,8 +25,7 @@
 #define GITHUB_REPO "esp32-auto-ota"
 #define FIRMWARE_VERSION "1.0.0"
 
-// GitHub URLs
-#define VERSION_JSON_URL "https://raw.githubusercontent.com/" GITHUB_USER "/" GITHUB_REPO "/main/version.json"
+// GitHub URLs - Use direct firmware URL for simplicity
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
 
 static const char *TAG = "OTA_APP";
@@ -83,87 +81,60 @@ void wifi_init(void) {
     ESP_LOGI(TAG, "WiFi started");
 }
 
-bool check_for_updates(void) {
-    ESP_LOGI(TAG, "Checking GitHub for updates...");
+// Check if we should update by comparing with current running firmware
+bool should_update(void) {
+    ESP_LOGI(TAG, "Checking if update needed...");
     
-    esp_http_client_config_t config = {
-        .url = VERSION_JSON_URL,
-        .timeout_ms = 15000,
-    };
+    // Get current running firmware info
+    const esp_app_desc_t *running_app = esp_ota_get_app_description();
+    ESP_LOGI(TAG, "Currently running: %s", running_app->version);
+    ESP_LOGI(TAG, "This firmware: %s", FIRMWARE_VERSION);
     
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(TAG, "Failed to create HTTP client");
-        return false;
+    // Simple approach: Always try to update if we have a new version in code
+    // This ensures the ESP32 will update to whatever version is in FIRMWARE_VERSION
+    if (strcmp(running_app->version, FIRMWARE_VERSION) != 0) {
+        ESP_LOGI(TAG, "Update needed: running %s, want %s", running_app->version, FIRMWARE_VERSION);
+        return true;
     }
     
-    esp_http_client_set_method(client, HTTP_METHOD_GET);
-    
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to connect to GitHub: %s", esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    
-    char buffer[512];
-    int content_length = esp_http_client_fetch_headers(client);
-    int read_len = esp_http_client_read(client, buffer, sizeof(buffer) - 1);
-    
-    bool update_available = false;
-    
-    if (read_len > 0) {
-        buffer[read_len] = '\0';
-        ESP_LOGI(TAG, "Received version info");
-        
-        cJSON *json = cJSON_Parse(buffer);
-        if (json != NULL) {
-            cJSON *version = cJSON_GetObjectItem(json, "version");
-            if (cJSON_IsString(version) && version->valuestring != NULL) {
-                ESP_LOGI(TAG, "Current: %s, Available: %s", FIRMWARE_VERSION, version->valuestring);
-                
-                if (strcmp(version->valuestring, FIRMWARE_VERSION) != 0) {
-                    ESP_LOGI(TAG, "New version available: %s", version->valuestring);
-                    update_available = true;
-                } else {
-                    ESP_LOGI(TAG, "Already running latest version");
-                }
-            } else {
-                ESP_LOGE(TAG, "Invalid version format in JSON");
-            }
-            cJSON_Delete(json);
-        } else {
-            ESP_LOGE(TAG, "Failed to parse JSON");
-        }
-    } else {
-        ESP_LOGE(TAG, "Failed to read version info");
-    }
-    
-    esp_http_client_cleanup(client);
-    return update_available;
+    ESP_LOGI(TAG, "No update needed - already running version %s", FIRMWARE_VERSION);
+    return false;
 }
 
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update from GitHub...");
+    ESP_LOGI(TAG, "Download URL: %s", FIRMWARE_BIN_URL);
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
-        .timeout_ms = 60000,
+        .timeout_ms = 90000, // 90 seconds for larger firmware
+        .buffer_size_tx = 4096,
     };
     
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
+        .bulk_flash_erase = true, // Faster for large updates
     };
     
-    ESP_LOGI(TAG, "Downloading firmware from: %s", FIRMWARE_BIN_URL);
-    
+    ESP_LOGI(TAG, "Initializing OTA...");
     esp_err_t ret = esp_https_ota(&ota_config);
+    
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "OTA Update Successful! Rebooting...");
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "OTA Update Successful! Rebooting in 3 seconds...");
+        
+        // Blink rapidly to indicate success
+        for(int i = 0; i < 10; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+        }
+        
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error details: %d", ret);
     }
 }
 
@@ -200,15 +171,16 @@ void app_main(void) {
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected!");
     
-    // Check for updates immediately after boot
-    ESP_LOGI(TAG, "Checking for updates...");
-    if (check_for_updates()) {
-        ESP_LOGI(TAG, "Update found! Starting download...");
-        blink_led_pattern(8, 150);
+    // Check if we need to update
+    if (should_update()) {
+        ESP_LOGI(TAG, "Update needed! Starting OTA process...");
+        blink_led_pattern(5, 200); // Fast blink = updating
         perform_ota_update();
+    } else {
+        ESP_LOGI(TAG, "Running latest version %s", FIRMWARE_VERSION);
     }
     
-    ESP_LOGI(TAG, "Running main application");
+    ESP_LOGI(TAG, "Starting main application");
     
     // Main application loop
     int counter = 0;
@@ -223,19 +195,19 @@ void app_main(void) {
         
         counter++;
         
-        // Check for updates every 10 minutes
-        if (counter % 600 == 0) {
-            ESP_LOGI(TAG, "Scheduled update check...");
-            if (check_for_updates()) {
+        // Check for updates every 30 minutes
+        if (counter % 1800 == 0) { // 1800 seconds = 30 minutes
+            ESP_LOGI(TAG, "Periodic update check...");
+            if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
-                blink_led_pattern(10, 100);
+                blink_led_pattern(8, 150);
                 perform_ota_update();
             }
         }
         
-        // Show status every 10 cycles
-        if (counter % 10 == 0) {
-            ESP_LOGI(TAG, "Still running - Total cycles: %d", counter);
+        // Show status every 30 cycles (30 seconds)
+        if (counter % 30 == 0) {
+            ESP_LOGI(TAG, "Status: Running version %s - Total cycles: %d", FIRMWARE_VERSION, counter);
         }
     }
 }
