@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS 
+        "main.c"
+        "ota_manager.c"
+    INCLUDE_DIRS 
+        "."
+    REQUIRES 
+        nvs_flash 
+        esp_https_ota 
+        json
+        mbedtls
+)
