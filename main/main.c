@@ -9,13 +9,13 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"  // ADD THIS LINE
+#include "driver/gpio.h"
 
 // SET YOUR WIFI HERE
 #define WIFI_SSID "INPT-Residence"
 #define WIFI_PASS "iinnpptt"
 
-// ADD LED CONFIG - GPIO2 is usually the built-in LED on ESP32 dev boards
+// Try different GPIOs - start with GPIO2
 #define BLINK_GPIO GPIO_NUM_2
 
 static const char *TAG = "OTA_APP";
@@ -39,25 +39,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 void wifi_init(void) {
     wifi_event_group = xEventGroupCreate();
     
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_init();
+    esp_event_loop_create_default();
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_wifi_init(&cfg);
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip);
 
     wifi_config_t wifi_config = {
         .sta = {
@@ -65,55 +57,45 @@ void wifi_init(void) {
             .password = WIFI_PASS,
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
 
     ESP_LOGI(TAG, "WiFi started");
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "ESP32 Auto-OTA Starting...");
-    ESP_LOGI(TAG, "Version: %s", FIRMWARE_VERSION);
+    ESP_LOGI(TAG, "Starting ESP32 Auto-OTA - Version: %s", FIRMWARE_VERSION);
     
-    // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
+    // Initialize NVS (simplified)
+    nvs_flash_init();
     
-    // Initialize GPIO for LED - ADD THIS SECTION
+    // Initialize LED GPIO
     gpio_reset_pin(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-    ESP_LOGI(TAG, "LED GPIO initialized");
+    ESP_LOGI(TAG, "LED ready on GPIO %d", BLINK_GPIO);
     
-    // Connect to WiFi
+    // Start WiFi (don't wait for connection)
     wifi_init();
-    ESP_LOGI(TAG, "Waiting for WiFi connection...");
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
-    ESP_LOGI(TAG, "WiFi Connected!");
+    ESP_LOGI(TAG, "WiFi connecting...");
     
-    // Get current running firmware info
-    const esp_app_desc_t *app_desc = esp_app_get_description();
-    ESP_LOGI(TAG, "Running firmware: %s", app_desc->version);
-    
-    // Main loop with LED blinking - MODIFIED THIS SECTION
+    // Main loop - simple LED blinking with clean messages
     int counter = 0;
     while (1) {
-        // Turn LED ON
+        // Blink LED every second
         gpio_set_level(BLINK_GPIO, 1);
-        ESP_LOGI(TAG, "LED ON - Running... Cycle: %d", counter);
+        ESP_LOGI(TAG, "LED ON - Count: %d", counter);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
         
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
-        
-        // Turn LED OFF
         gpio_set_level(BLINK_GPIO, 0);
-        ESP_LOGI(TAG, "LED OFF - Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
-        
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
+        ESP_LOGI(TAG, "LED OFF - Count: %d", counter);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
         
         counter++;
+        
+        // Show status every 10 cycles
+        if (counter % 10 == 0) {
+            ESP_LOGI(TAG, "Still running - Total cycles: %d", counter);
+        }
     }
 }
