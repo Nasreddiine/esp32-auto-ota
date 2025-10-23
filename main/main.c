@@ -75,7 +75,7 @@ void check_for_updates(void) {
     // Simple version check - replace with your GitHub username
     char version_url[150];
     snprintf(version_url, sizeof(version_url), 
-             "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/esp32-auto-ota/main/version.json");
+             "https://raw.githubusercontent.com/Nasreddiine/esp32-auto-ota/main/version.json");
     
     esp_http_client_config_t config = {
         .url = version_url,
@@ -124,3 +124,4 @@ void app_main(void) {
         vTaskDelay(10000 / portTICK_PERIOD_MS); // 10 seconds
     }
 }
+
