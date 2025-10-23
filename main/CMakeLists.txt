@@ -7,6 +7,11 @@ idf_component_register(
     REQUIRES 
         nvs_flash 
         esp_https_ota 
+        esp_http_client
+        esp_wifi
+        esp_event
         json
         mbedtls
+        freertos
+        lwip
 )
