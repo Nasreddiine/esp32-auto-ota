@@ -1,6 +1,108 @@
-cat > firmware-release/version.json << EOF
-{
-  "version": "$VERSION",
-  ...
-}
-EOF
+name: Build and Release ESP32 Firmware
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build with ESP-IDF
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.1.1
+        target: esp32
+        path: ./
+
+    - name: Extract version from main.c
+      id: version
+      run: |
+        VERSION=$(grep -oP 'FIRMWARE_VERSION "\K[^"]*' main/main.c || echo "1.0.0")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Detected version: $VERSION"
+
+    - name: Prepare firmware files
+      run: |
+        # Create output directory
+        mkdir -p firmware-release
+        
+        # Copy ALL binary files with their original names
+        cp build/bootloader/bootloader.bin firmware-release/
+        cp build/partition_table/partition-table.bin firmware-release/
+        
+        # Find and copy the main application binary
+        for file in build/*.bin; do
+          if [[ $file != *"bootloader"* && $file != *"partition-table"* ]]; then
+            cp "$file" firmware-release/firmware.bin
+            ORIGINAL_NAME=$(basename "$file")
+            echo "Main firmware: $ORIGINAL_NAME -> firmware.bin"
+            break
+          fi
+        done
+        
+        # Generate version info - FIXED: Use proper variable substitution
+        cat > firmware-release/version.json << EOF
+        {
+          "version": "$VERSION",
+          "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+          "url": "https://github.com/${{ github.repository }}/releases/download/$VERSION/firmware.bin",
+          "project": "ESP32-Auto-OTA"
+        }
+        EOF
+        
+        echo "=== Files ready for release ==="
+        ls -la firmware-release/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: |
+          # ESP32 Auto-OTA Firmware
+          
+          **Version:** ${{ steps.version.outputs.version }}
+          **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Target:** ESP32
+          
+          ## 📦 Files
+          - `firmware.bin` - Main application firmware
+          - `bootloader.bin` - Bootloader
+          - `partition-table.bin` - Partition table
+          
+          ## 🔄 Auto-Update
+          ESP32 devices will automatically download and install this firmware when connected to WiFi.
+          
+          ## ⚡ Manual Flash
+          ```bash
+          esptool.py write_flash \
+            0x1000 bootloader.bin \
+            0x8000 partition-table.bin \ 
+            0x10000 firmware.bin
+          ```
+        files: |
+          firmware-release/bootloader.bin
+          firmware-release/partition-table.bin
+          firmware-release/firmware.bin
+          firmware-release/version.json
+        draft: false
+        prerelease: false
+
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ steps.version.outputs.version }}
+        path: |
+          firmware-release/*.bin
+          firmware-release/version.json
+        retention-days: 30
