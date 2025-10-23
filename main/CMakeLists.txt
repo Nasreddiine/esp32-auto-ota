@@ -13,6 +13,6 @@ idf_component_register(
         lwip
         freertos
         driver
-        cjson
+        json
         mbedtls
 )
