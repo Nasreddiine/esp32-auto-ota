@@ -5,14 +5,9 @@ idf_component_register(
         "."
     REQUIRES 
         nvs_flash 
-        app_update
         esp_https_ota 
         esp_http_client
         esp_wifi
         esp_event
-        lwip
-        freertos
         driver
-        json
-        mbedtls
 )
