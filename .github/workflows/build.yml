@@ -1,0 +1,46 @@
+name: Build ESP32 Firmware
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build with ESP-IDF
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.1.1
+        target: esp32
+        path: ./
+
+    - name: Generate version file
+      run: |
+        echo '{
+          "version": "${{ github.sha }}",
+          "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+          "url": "https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin"
+        }' > version.json
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware
+        path: |
+          build/*.bin
+          version.json
+
+    - name: Create Release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/*.bin
+          version.json
