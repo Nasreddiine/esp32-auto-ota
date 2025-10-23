@@ -21,30 +21,46 @@ jobs:
         target: esp32
         path: ./
 
+    - name: Extract version from main.c
+      id: version
+      run: |
+        VERSION=$(grep -oP 'FIRMWARE_VERSION "\K[^"]*' main/main.c || echo "1.0.0")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Detected version: $VERSION"
+
     - name: Prepare firmware package
       run: |
         # Create output directory
         mkdir -p firmware-output
         
-        # Copy ALL binary files recursively
-        find build/ -name "*.bin" -exec cp {} firmware-output/ \;
-        
-        # Rename the main application file to firmware.bin
-        # Look for the largest .bin file (usually the main firmware)
-        LARGEST_FILE=$(find firmware-output/ -name "*.bin" -exec du -b {} \; | sort -nr | head -1 | cut -f2)
-        if [ -n "$LARGEST_FILE" ] && [ "$LARGEST_FILE" != "firmware-output/bootloader.bin" ] && [ "$LARGEST_FILE" != "firmware-output/partition-table.bin" ]; then
-          mv "$LARGEST_FILE" firmware-output/firmware.bin
-        fi
+        # Copy ALL binary files
+        cp build/bootloader/bootloader.bin firmware-output/
+        cp build/partition_table/partition-table.bin firmware-output/
+        cp build/*.bin firmware-output/
         
         # Generate version info
         echo '{
-          "version": "${{ github.sha }}",
+          "version": "${{ steps.version.outputs.version }}",
           "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
           "url": "https://github.com/${{ github.repository }}/releases/latest/download/firmware.bin"
         }' > firmware-output/version.json
         
         echo "=== Final files ==="
         ls -la firmware-output/
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: |
+          firmware-output/*.bin
+          firmware-output/version.json
+        body: |
+          Auto-generated ESP32 Firmware
+          
+          **Version:** ${{ steps.version.outputs.version }}
+          
+          Devices will auto-update when this release is published.
 
     - name: Upload firmware artifacts
       uses: actions/upload-artifact@v4
