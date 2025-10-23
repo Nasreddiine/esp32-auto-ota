@@ -7,8 +7,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "esp_http_client.h"
-#include "esp_https_ota.h"
 #include "nvs_flash.h"
 
 // SET YOUR WIFI HERE
@@ -69,36 +67,9 @@ void wifi_init(void) {
     ESP_LOGI(TAG, "WiFi started");
 }
 
-void check_for_updates(void) {
-    ESP_LOGI(TAG, "Checking for updates...");
-    
-    // Simple version check - replace with your GitHub username
-    char version_url[150];
-    snprintf(version_url, sizeof(version_url), 
-             "https://raw.githubusercontent.com/Nasreddiine/esp32-auto-ota/main/version.json");
-    
-    esp_http_client_config_t config = {
-        .url = version_url,
-    };
-    
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    esp_http_client_set_method(client, HTTP_METHOD_GET);
-    
-    esp_err_t err = esp_http_client_perform(client);
-    
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Can reach update server");
-        // For now, just log that we can reach the server
-        // In a real implementation, you would parse the version.json here
-    } else {
-        ESP_LOGE(TAG, "Cannot reach update server");
-    }
-    
-    esp_http_client_cleanup(client);
-}
-
 void app_main(void) {
-    ESP_LOGI(TAG, "App starting... Version: %s", FIRMWARE_VERSION);
+    ESP_LOGI(TAG, "🚀 ESP32 Auto-OTA Starting...");
+    ESP_LOGI(TAG, "Version: %s", FIRMWARE_VERSION);
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -110,18 +81,19 @@ void app_main(void) {
     
     // Connect to WiFi
     wifi_init();
-    ESP_LOGI(TAG, "Waiting for WiFi...");
+    ESP_LOGI(TAG, "⌛ Waiting for WiFi connection...");
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
-    ESP_LOGI(TAG, "WiFi connected!");
+    ESP_LOGI(TAG, "✅ WiFi Connected!");
     
-    // Check for updates
-    check_for_updates();
+    // Get current running firmware info
+    const esp_app_desc_t *app_desc = esp_ota_get_app_description();
+    ESP_LOGI(TAG, "Running firmware: %s", app_desc->version);
     
     // Main loop
     int counter = 0;
     while (1) {
-        ESP_LOGI(TAG, "Running... %d", counter++);
+        ESP_LOGI(TAG, "🏃 Running... Cycle: %d", counter++);
+        ESP_LOGI(TAG, "💾 Free memory: %d bytes", esp_get_free_heap_size());
         vTaskDelay(10000 / portTICK_PERIOD_MS); // 10 seconds
     }
 }
-
