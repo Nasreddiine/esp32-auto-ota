@@ -12,5 +12,7 @@ idf_component_register(
         esp_event
         lwip
         freertos
-        driver  # ADD THIS LINE
+        driver
+        cjson
+        mbedtls
 )
