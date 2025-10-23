@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>  // ADD THIS LINE
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -68,7 +69,7 @@ void wifi_init(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "🚀 ESP32 Auto-OTA Starting...");
+    ESP_LOGI(TAG, "ESP32 Auto-OTA Starting...");
     ESP_LOGI(TAG, "Version: %s", FIRMWARE_VERSION);
     
     // Initialize NVS
@@ -81,19 +82,22 @@ void app_main(void) {
     
     // Connect to WiFi
     wifi_init();
-    ESP_LOGI(TAG, "⌛ Waiting for WiFi connection...");
+    ESP_LOGI(TAG, "Waiting for WiFi connection...");
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
-    ESP_LOGI(TAG, "✅ WiFi Connected!");
+    ESP_LOGI(TAG, "WiFi Connected!");
     
-    // Get current running firmware info
-    const esp_app_desc_t *app_desc = esp_ota_get_app_description();
+    // Get current running firmware info (using non-deprecated function)
+    const esp_app_desc_t *app_desc = esp_app_get_description();
     ESP_LOGI(TAG, "Running firmware: %s", app_desc->version);
     
     // Main loop
     int counter = 0;
     while (1) {
-        ESP_LOGI(TAG, "🏃 Running... Cycle: %d", counter++);
-        ESP_LOGI(TAG, "💾 Free memory: %d bytes", esp_get_free_heap_size());
+        ESP_LOGI(TAG, "Running... Cycle: %d", counter++);
+        
+        // FIXED: Use PRIu32 for uint32_t instead of %d
+        ESP_LOGI(TAG, "Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
+        
         vTaskDelay(10000 / portTICK_PERIOD_MS); // 10 seconds
     }
 }
