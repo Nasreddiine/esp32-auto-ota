@@ -13,5 +13,4 @@ idf_component_register(
         app_update
 )
 
-# Set component version to match project
 set(COMPONENT_VER "1.0.0")
