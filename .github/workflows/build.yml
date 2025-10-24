@@ -37,7 +37,39 @@ jobs:
         # Copy binary files
         cp build/bootloader/bootloader.bin firmware-release/
         cp build/partition_table/partition-table.bin firmware-release/
-        cp build/esp32-auto-ota.bin firmware-release/firmware.bin
+        
+        # Find and copy the main application binary
+        echo "=== Looking for firmware files in build/ ==="
+        find build/ -name "*.bin" -type f | grep -v bootloader | grep -v partition-table
+        
+        # Try common firmware file names
+        if [ -f "build/esp32-auto-ota.bin" ]; then
+          cp build/esp32-auto-ota.bin firmware-release/firmware.bin
+          echo "Using: esp32-auto-ota.bin"
+        elif [ -f "build/esp32_auto_ota.bin" ]; then
+          cp build/esp32_auto_ota.bin firmware-release/firmware.bin
+          echo "Using: esp32_auto_ota.bin"
+        elif [ -f "build/main.bin" ]; then
+          cp build/main.bin firmware-release/firmware.bin
+          echo "Using: main.bin"
+        else
+          # Find the first .bin file that's not bootloader or partition-table
+          for file in build/*.bin; do
+            if [[ $file != *"bootloader"* && $file != *"partition-table"* ]]; then
+              cp "$file" firmware-release/firmware.bin
+              echo "Using: $(basename $file)"
+              break
+            fi
+          done
+        fi
+        
+        # Verify firmware file exists
+        if [ ! -f "firmware-release/firmware.bin" ]; then
+          echo "ERROR: No firmware.bin file found!"
+          echo "Available files in build/:"
+          ls -la build/
+          exit 1
+        fi
         
         # Generate version info
         cat > firmware-release/version.json << EOF
