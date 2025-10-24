@@ -394,9 +394,11 @@ void blink_led_pattern(int times, int delay_ms) {
     }
 }
 
+// ... (keep all the same code as version 1.0.0 until the main loop)
+
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA ===");
-    ESP_LOGI(TAG, "Initial Version: 1.0.0 (Manual Flash)");
+    ESP_LOGI(TAG, "Version: 1.0.1 - OTA Updated Version");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
@@ -430,19 +432,27 @@ void app_main(void) {
         blink_led_pattern(5, 200);
         perform_ota_update();
     } else {
-        ESP_LOGI(TAG, "No update needed. Running current version.");
+        ESP_LOGI(TAG, "No update needed. Running current version 1.0.1");
     }
     
-    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
+    ESP_LOGI(TAG, "Starting main application - Triple blink pattern (version 1.0.1)");
     
-    // Main loop - Version 1.0.0: Single blink pattern
+    // Main loop - Version 1.0.1: TRIPLE blink pattern (different from 1.0.0)
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.0: Single blink pattern
+        // Version 1.0.1: TRIPLE blink pattern (visibly different from 1.0.0)
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2800 / portTICK_PERIOD_MS);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(150 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(2250 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
@@ -458,8 +468,7 @@ void app_main(void) {
         
         // Show status every 30 seconds
         if (seconds_counter % 30 == 0) {
-            ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
-                     running_app->version, seconds_counter);
+            ESP_LOGI(TAG, "Status: Version 1.0.1 - Running for %d seconds", seconds_counter);
         }
     }
 }
