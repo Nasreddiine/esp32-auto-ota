@@ -13,6 +13,6 @@ idf_component_register(
         app_update
 )
 
-set(COMPONENT_VER "1.0.2")
+
 
 
