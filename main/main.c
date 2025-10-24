@@ -12,7 +12,6 @@
 #include "esp_https_ota.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
-#include "cJSON.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -86,13 +85,44 @@ void wifi_init(void) {
     ESP_LOGI(TAG, "WiFi started");
 }
 
+// Simple string extraction for version from JSON
+char* extract_version_from_json(const char* json_response) {
+    const char* tag_key = "\"tag_name\":\"";
+    char* tag_start = strstr(json_response, tag_key);
+    
+    if (!tag_start) {
+        ESP_LOGE(TAG, "tag_name not found in JSON response");
+        return NULL;
+    }
+    
+    tag_start += strlen(tag_key); // Move past the key
+    char* tag_end = strchr(tag_start, '"');
+    
+    if (!tag_end) {
+        ESP_LOGE(TAG, "Invalid tag_name format in JSON");
+        return NULL;
+    }
+    
+    size_t version_len = tag_end - tag_start;
+    char* version = malloc(version_len + 1);
+    if (!version) {
+        ESP_LOGE(TAG, "Failed to allocate memory for version");
+        return NULL;
+    }
+    
+    strncpy(version, tag_start, version_len);
+    version[version_len] = '\0';
+    
+    return version;
+}
+
 // Get latest version from GitHub API
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
-        .timeout_ms = 10000,
+        .timeout_ms = 15000,
     };
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -118,6 +148,12 @@ char* get_latest_version(void) {
         return NULL;
     }
     
+    // Limit response size to prevent memory issues
+    if (content_length > 4096) {
+        ESP_LOGW(TAG, "Response too large, limiting to 4096 bytes");
+        content_length = 4096;
+    }
+    
     char *response = malloc(content_length + 1);
     if (!response) {
         ESP_LOGE(TAG, "Failed to allocate memory for response");
@@ -131,32 +167,20 @@ char* get_latest_version(void) {
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     
-    // Parse JSON response
-    cJSON *root = cJSON_Parse(response);
-    if (!root) {
-        ESP_LOGE(TAG, "Failed to parse JSON response");
-        free(response);
-        return NULL;
+    // Extract version using simple string parsing
+    char *latest_version = extract_version_from_json(response);
+    
+    if (latest_version) {
+        ESP_LOGI(TAG, "Latest version on GitHub: %s", latest_version);
+    } else {
+        ESP_LOGE(TAG, "Failed to extract version from response");
     }
     
-    cJSON *tag_name = cJSON_GetObjectItem(root, "tag_name");
-    if (!tag_name) {
-        ESP_LOGE(TAG, "No tag_name in response");
-        cJSON_Delete(root);
-        free(response);
-        return NULL;
-    }
-    
-    char *latest_version = strdup(tag_name->valuestring);
-    ESP_LOGI(TAG, "Latest version on GitHub: %s", latest_version);
-    
-    cJSON_Delete(root);
     free(response);
-    
     return latest_version;
 }
 
-// Compare version strings (simple comparison)
+// Compare version strings
 bool is_newer_version(const char *current, const char *latest) {
     ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
     return strcmp(current, latest) != 0;
@@ -292,7 +316,7 @@ void app_main(void) {
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected!");
     
-    // Check if we need to update
+    // Initial update check
     if (should_update()) {
         ESP_LOGI(TAG, "Update needed! Starting OTA process...");
         blink_led_pattern(5, 200); // Fast blink = updating
@@ -308,7 +332,6 @@ void app_main(void) {
     while (1) {
         // Normal operation - slow blink
         gpio_set_level(BLINK_GPIO, 1);
-        ESP_LOGI(TAG, "Running - Cycle: %d", counter);
         vTaskDelay(500 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
@@ -327,6 +350,7 @@ void app_main(void) {
             // Reset counter periodically to avoid overflow
             if (counter >= 10000) {
                 counter = 0;
+                ESP_LOGI(TAG, "Counter reset to prevent overflow");
             }
         }
         
@@ -334,7 +358,9 @@ void app_main(void) {
         if (counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Running version %s - Total cycles: %d", 
                      running_app->version, counter);
-            ESP_LOGI(TAG, "Next update check in: %d cycles", UPDATE_CHECK_CYCLES - (counter % UPDATE_CHECK_CYCLES));
+            int cycles_until_next_check = UPDATE_CHECK_CYCLES - (counter % UPDATE_CHECK_CYCLES);
+            ESP_LOGI(TAG, "Next update check in: %d cycles (%d seconds)", 
+                     cycles_until_next_check, cycles_until_next_check / 2);
         }
     }
 }
