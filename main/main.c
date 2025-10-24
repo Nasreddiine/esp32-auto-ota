@@ -29,7 +29,6 @@
 
 // Update check interval (1 minute 30 seconds = 90 seconds)
 #define UPDATE_CHECK_INTERVAL_SECONDS 90
-#define UPDATE_CHECK_CYCLES (UPDATE_CHECK_INTERVAL_SECONDS) // Now in seconds
 
 // GitHub URLs
 #define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
@@ -39,6 +38,29 @@ static const char *TAG = "OTA_APP";
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
+
+// GitHub's root certificate (simplified - for testing)
+// In production, you should use the full certificate chain
+static const char *github_root_cert = "-----BEGIN CERTIFICATE-----\n" \
+"MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF\n" \
+"ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\n" \
+"b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL\n" \
+"MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\n" \
+"b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj\n" \
+"ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM\n" \
+"9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw\n" \
+"IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6\n" \
+"VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L\n" \
+"93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm\n" \
+"jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC\n" \
+"AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA\n" \
+"A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI\n" \
+"U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs\n" \
+"N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv\n" \
+"o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU\n" \
+"5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy\n" \
+"rqXRfboQnoZsG4q5WTP468SQvvG5\n" \
+"-----END CERTIFICATE-----";
 
 // Sync time for TLS certificate validation
 void sync_time(void) {
@@ -52,13 +74,12 @@ void sync_time(void) {
     sntp_setservername(0, "pool.ntp.org");
     sntp_setservername(1, "time.google.com");
     sntp_setservername(2, "time.windows.com");
-    sntp_setservername(3, "time.nist.gov");
     
     sntp_init();
     
-    // Wait for time to be set with better timeout handling
+    // Wait for time to be set
     int retry = 0;
-    const int retry_count = 15;
+    const int retry_count = 10;
     
     while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
@@ -67,18 +88,9 @@ void sync_time(void) {
     
     if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
         ESP_LOGI(TAG, "Time synchronized successfully!");
-        
-        // Print current time for verification
-        time_t now;
-        struct tm timeinfo;
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        ESP_LOGI(TAG, "Current time: %04d-%02d-%02d %02d:%02d:%02d",
-                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     } else {
-        ESP_LOGW(TAG, "Time synchronization failed, continuing without accurate time");
-        // Set a reasonable fallback time (2024)
+        ESP_LOGW(TAG, "Time synchronization failed");
+        // Set fallback time
         struct timeval tv = {
             .tv_sec = 1704067200, // January 1, 2024
             .tv_usec = 0
@@ -167,15 +179,17 @@ char* extract_version_from_json(const char* json_response) {
     return version;
 }
 
-// Get latest version from GitHub API with proper TLS
+// Get latest version from GitHub API with FIXED TLS configuration
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
+    // First try with proper certificate
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
-        .timeout_ms = 20000,
-        .cert_pem = NULL,  // Use system certs
+        .timeout_ms = 15000,
+        .cert_pem = github_root_cert,
         .skip_cert_common_name_check = false,
+        .keep_alive_enable = true,
     };
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -190,15 +204,14 @@ char* get_latest_version(void) {
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
-        
-        // If TLS fails, try without certificate verification (fallback)
-        ESP_LOGW(TAG, "Trying fallback without certificate verification...");
         esp_http_client_cleanup(client);
         
-        // Retry with skip_cert_common_name_check = true
+        // Fallback: try without certificate verification
+        ESP_LOGW(TAG, "Trying fallback without certificate...");
         esp_http_client_config_t fallback_config = {
             .url = GITHUB_API_URL,
-            .timeout_ms = 20000,
+            .timeout_ms = 15000,
+            .cert_pem = NULL,
             .skip_cert_common_name_check = true,
         };
         
@@ -285,40 +298,33 @@ bool should_update(void) {
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
     
-    // Try up to 2 times
-    for (int attempt = 0; attempt < 2; attempt++) {
-        char *latest_version = get_latest_version();
-        if (latest_version) {
-            bool update_needed = is_newer_version(running_app->version, latest_version);
-            
-            if (update_needed) {
-                ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
-                         running_app->version, latest_version);
-            } else {
-                ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
-            }
-            
-            free(latest_version);
-            return update_needed;
-        }
-        
-        if (attempt < 1) {
-            ESP_LOGW(TAG, "Attempt %d failed, retrying in 3 seconds...", attempt + 1);
-            vTaskDelay(3000 / portTICK_PERIOD_MS);
-        }
+    char *latest_version = get_latest_version();
+    if (!latest_version) {
+        ESP_LOGE(TAG, "Failed to get latest version from GitHub");
+        return false;
     }
     
-    ESP_LOGE(TAG, "All attempts to get latest version failed");
-    return false;
+    bool update_needed = is_newer_version(running_app->version, latest_version);
+    
+    if (update_needed) {
+        ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
+                 running_app->version, latest_version);
+    } else {
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
+    }
+    
+    free(latest_version);
+    return update_needed;
 }
 
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update from GitHub...");
     
+    // Try with certificate first
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
-        .cert_pem = NULL,
+        .cert_pem = github_root_cert,
         .skip_cert_common_name_check = false,
     };
     
@@ -345,11 +351,12 @@ void perform_ota_update(void) {
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(err));
         
-        // Try fallback without strict certificate checking
-        ESP_LOGW(TAG, "Trying OTA fallback without certificate verification...");
+        // Try fallback without certificate
+        ESP_LOGW(TAG, "Trying OTA fallback without certificate...");
         esp_http_client_config_t fallback_config = {
             .url = FIRMWARE_BIN_URL,
             .timeout_ms = 120000,
+            .cert_pem = NULL,
             .skip_cert_common_name_check = true,
         };
         
@@ -421,10 +428,10 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Starting main application - LED double blink pattern (version 1.0.2)");
     
-    // Main loop - simplified timing
+    // Main loop
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.2: NEW PATTERN - Double blink every 3 seconds
+        // Version 1.0.2: Double blink pattern
         gpio_set_level(BLINK_GPIO, 1);
         vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
@@ -432,7 +439,7 @@ void app_main(void) {
         gpio_set_level(BLINK_GPIO, 1);
         vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2400 / portTICK_PERIOD_MS);  // Longer pause
+        vTaskDelay(2400 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
@@ -450,7 +457,6 @@ void app_main(void) {
         if (seconds_counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
                      running_app->version, seconds_counter);
-            ESP_LOGI(TAG, "LED Pattern: Double Blink (1.0.2 feature)");
         }
     }
 }
