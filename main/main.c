@@ -332,10 +332,10 @@ void app_main(void) {
     while (1) {
         // Normal operation - slow blink
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
         
         counter++;
         
@@ -364,3 +364,4 @@ void app_main(void) {
         }
     }
 }
+
