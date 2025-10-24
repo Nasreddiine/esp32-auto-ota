@@ -14,4 +14,4 @@ idf_component_register(
 )
 
 # Set component version to match project
-set(COMPONENT_VER "1.0.0")
+set(COMPONENT_VER "1.0.1")
