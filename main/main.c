@@ -23,7 +23,7 @@
 // GitHub OTA Configuration
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
-#define FIRMWARE_VERSION "1.0.1"
+#define FIRMWARE_VERSION "1.0.0"
 
 // GitHub URLs - Use direct firmware URL for simplicity
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
@@ -188,10 +188,10 @@ void app_main(void) {
         // Normal operation - slow blink
         gpio_set_level(BLINK_GPIO, 1);
         ESP_LOGI(TAG, "Running - Cycle: %d", counter);
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
         
         counter++;
         
@@ -211,6 +211,7 @@ void app_main(void) {
         }
     }
 }
+
 
 
 
