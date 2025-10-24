@@ -12,7 +12,7 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 
-// WiFi Configuration - UPDATED
+// WiFi Configuration
 #define WIFI_SSID "RESIDENCE-1-Etage123"
 #define WIFI_PASS "iinnpptt"
 
@@ -27,7 +27,7 @@
 #define VERSION_URL "https://raw.githubusercontent.com/Nasreddiine/esp32_firmware/refs/heads/main/version.txt"
 #define FIRMWARE_URL "https://github.com/Nasreddiine/esp32-auto-ota/releases/latest/download/firmware.bin"
 
-// Update check interval - CHANGED to 2 minutes (120 seconds)
+// Update check interval - 2 minutes (120 seconds)
 #define UPDATE_CHECK_INTERVAL_SECONDS 120
 
 static const char *TAG = "OTA_APP";
@@ -234,7 +234,7 @@ void check_for_firmware_update(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 Auto-OTA ===");
+    ESP_LOGI(TAG, "=== ESP32 Auto-OTA Version 1.0.1 ===");
     ESP_LOGI(TAG, "Starting device...");
     
     // Initialize NVS
@@ -256,21 +256,26 @@ void app_main(void) {
     // Check for updates immediately
     check_for_firmware_update();
     
-    ESP_LOGI(TAG, "Starting main loop - Single blink pattern");
+    ESP_LOGI(TAG, "Starting main loop - Double blink pattern (Version 1.0.1)");
     ESP_LOGI(TAG, "Update check interval: %d seconds", UPDATE_CHECK_INTERVAL_SECONDS);
     
-    // Main loop - simple single blink
+    // Main loop - DOUBLE blink pattern for Version 1.0.1
     int seconds_counter = 0;
     while (1) {
-        // Single blink pattern (500ms ON, 2500ms OFF)
+        // Version 1.0.1: DOUBLE blink pattern (clearly different!)
+        // Pattern: blink-blink-pause (200ms ON, 200ms OFF, 200ms ON, 2400ms OFF)
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2500 / portTICK_PERIOD_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(2400 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
-        // Check for updates every 2 minutes (120 seconds) - UPDATED
+        // Check for updates every 2 minutes (120 seconds)
         if (seconds_counter >= UPDATE_CHECK_INTERVAL_SECONDS) {
             ESP_LOGI(TAG, "Periodic update check after %d seconds...", seconds_counter);
             check_for_firmware_update();
