@@ -13,4 +13,5 @@ idf_component_register(
         app_update
 )
 
-set(COMPONENT_VER "1.0.0")
+# Set component version to 1.0.1
+set(COMPONENT_VER "1.0.1")
