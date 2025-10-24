@@ -10,7 +10,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 endif()
 
-# Set project version here too
+# Set project version
 set(PROJECT_VER "1.0.1")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
