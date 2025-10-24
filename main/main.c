@@ -345,7 +345,7 @@ void app_main(void) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
@@ -366,3 +366,4 @@ void app_main(void) {
         }
     }
 }
+
