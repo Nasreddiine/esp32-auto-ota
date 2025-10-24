@@ -39,7 +39,7 @@ static const char *TAG = "OTA_APP";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// Let's try without certificate first to see if that works
+// Skip certificate verification for now
 static const char *github_cert = NULL;
 
 void sync_time(void) {
@@ -133,12 +133,12 @@ char* extract_version_from_json(const char* json_response) {
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
-    // Try without certificate first (skip verification)
+    // Skip certificate verification
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
         .timeout_ms = 15000,
         .cert_pem = github_cert,
-        .skip_cert_common_name_check = true,  // Skip verification
+        .skip_cert_common_name_check = true,
     };
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -176,7 +176,7 @@ char* get_latest_version(void) {
     }
     
     response[read_len] = '\0';
-    ESP_LOGI(TAG, "Response: %s", response);
+    ESP_LOGI(TAG, "GitHub Response received");
     
     return extract_version_from_json(response);
 }
@@ -201,12 +201,12 @@ bool should_update(void) {
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update...");
     
-    // Skip certificate verification for OTA as well
+    // Skip certificate verification for OTA
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 60000,
         .cert_pem = github_cert,
-        .skip_cert_common_name_check = true,  // Skip verification
+        .skip_cert_common_name_check = true,
     };
     
     esp_https_ota_config_t ota_config = {
@@ -216,7 +216,16 @@ void perform_ota_update(void) {
     
     esp_err_t err = esp_https_ota(&ota_config);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "OTA Successful! Rebooting...");
+        ESP_LOGI(TAG, "OTA Update Successful! Rebooting...");
+        
+        // Success blink pattern
+        for(int i = 0; i < 10; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+        }
+        
         vTaskDelay(3000 / portTICK_PERIOD_MS);
         esp_restart();
     } else {
@@ -225,7 +234,7 @@ void perform_ota_update(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 Auto-OTA Version 1.0.0 ===");
+    ESP_LOGI(TAG, "=== ESP32 Auto-OTA Version 1.0.1 ===");
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -248,26 +257,34 @@ void app_main(void) {
     sync_time();
     
     // Check for updates immediately
+    ESP_LOGI(TAG, "Performing initial update check...");
     if (should_update()) {
         ESP_LOGI(TAG, "Update available! Starting OTA...");
         perform_ota_update();
+    } else {
+        ESP_LOGI(TAG, "No update needed - running latest version");
     }
     
-    ESP_LOGI(TAG, "Running main loop - SINGLE BLINK pattern");
+    ESP_LOGI(TAG, "Starting main application - DOUBLE BLINK pattern (Version 1.0.1)");
     
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.0: SINGLE blink (ON for 200ms, OFF for 2800ms)
+        // Version 1.0.1: DOUBLE BLINK pattern (clearly different from 1.0.0)
+        // Pattern: blink-blink-pause (200ms ON, 200ms OFF, 200ms ON, 2400ms OFF)
         gpio_set_level(BLINK_GPIO, 1);
         vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2800 / portTICK_PERIOD_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(2400 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
-        // Check for updates periodically
+        // Check for updates every 30 seconds
         if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
-            ESP_LOGI(TAG, "Checking for updates...");
+            ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update found! Starting OTA...");
                 perform_ota_update();
@@ -275,7 +292,7 @@ void app_main(void) {
         }
         
         if (seconds_counter % 30 == 0) {
-            ESP_LOGI(TAG, "Status: Running for %d seconds", seconds_counter);
+            ESP_LOGI(TAG, "Status: Version 1.0.1 - Running for %d seconds", seconds_counter);
         }
     }
 }
