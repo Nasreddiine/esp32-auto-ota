@@ -21,15 +21,11 @@ jobs:
         target: esp32
         path: ./
 
-    - name: Extract version from CMakeLists.txt
+    - name: Extract version from root CMakeLists.txt
       id: version
       run: |
-        # Try to extract version from main/CMakeLists.txt
-        VERSION=$(grep -oP 'set\(COMPONENT_VER "\K[^"]*' main/CMakeLists.txt || echo "1.0.0")
-        if [ -z "$VERSION" ] || [ "$VERSION" = "1.0.0" ]; then
-          # Fallback: extract from main.c
-          VERSION=$(grep -oP 'FIRMWARE_VERSION "\K[^"]*' main/main.c 2>/dev/null || echo "1.0.0")
-        fi
+        # Extract version from the main CMakeLists.txt
+        VERSION=$(grep -oP 'set\(PROJECT_VER "\K[^"]*' CMakeLists.txt || echo "1.0.0")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Detected version: $VERSION"
 
@@ -41,15 +37,7 @@ jobs:
         # Copy binary files
         cp build/bootloader/bootloader.bin firmware-release/
         cp build/partition_table/partition-table.bin firmware-release/
-        
-        # Find and copy the main application binary
-        for file in build/*.bin; do
-          if [[ $file != *"bootloader"* && $file != *"partition-table"* ]]; then
-            cp "$file" firmware-release/firmware.bin
-            echo "Main firmware: $(basename $file) -> firmware.bin"
-            break
-          fi
-        done
+        cp build/esp32-auto-ota.bin firmware-release/firmware.bin
         
         # Generate version info
         cat > firmware-release/version.json << EOF
