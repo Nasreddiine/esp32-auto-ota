@@ -39,38 +39,34 @@ static const char *TAG = "OTA_APP";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// Updated GitHub root certificate (ISRG Root X1)
-static const char *github_root_cert = 
+// Actual GitHub certificate (from your input)
+static const char *github_cert = 
 "-----BEGIN CERTIFICATE-----\n"
-"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
-"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"
-"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n"
-"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n"
-"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n"
-"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n"
-"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n"
-"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n"
-"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n"
-"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n"
-"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n"
-"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n"
-"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n"
-"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n"
-"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n"
-"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n"
-"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n"
-"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n"
-"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n"
-"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n"
-"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n"
-"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n"
-"ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\n"
-"TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\n"
-"jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\n"
-"oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\n"
-"4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n"
-"mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
-"emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
+"MIIEoTCCBEigAwIBAgIRAKtmhrVie+gFloITMBKGSfUwCgYIKoZIzj0EAwIwgY8x\n"
+"CzAJBgNVBAYTAkdCMRswGQYDVQQIExJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNV\n"
+"BAcTB1NhbGZvcmQxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDE3MDUGA1UEAxMu\n"
+"U2VjdGlnbyBFQ0MgRG9tYWluIFZhbGlkYXRpb24gU2VjdXJlIFNlcnZlciBDQTAe\n"
+"Fw0yNTAyMDUwMDAwMDBaFw0yNjAyMDUyMzU5NTlaMBUxEzARBgNVBAMTCmdpdGh1\n"
+"Yi5jb20wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQgNFxG/yzL+CSarvC7L3ep\n"
+"H5chNnG6wiYYxR5D/Z1J4MxGnIX8KbT5fCgLoyzHXL9v50bdBIq6y4AtN4gN7gbW\n"
+"o4IC/DCCAvgwHwYDVR0jBBgwFoAU9oUKOxGG4QR9DqoLLNLuzGR7e64wHQYDVR0O\n"
+"BBYEFFPIf96emE7HTda83quVPjA9PdHIMA4GA1UdDwEB/wQEAwIHgDAMBgNVHRMB\n"
+"Af8EAjAAMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjBJBgNVHSAEQjBA\n"
+"MDQGCysGAQQBsjEBAgIHMCUwIwYIKwYBBQUHAgEWF2h0dHBzOi8vc2VjdGlnby5j\n"
+"b20vQ1BTMAgGBmeBDAECATCBhAYIKwYBBQUHAQEEeDB2ME8GCCsGAQUFBzAChkNo\n"
+"dHRwOi8vY3J0LnNlY3RpZ28uY29tL1NlY3RpZ29FQ0NEb21haW5WYWxpZGF0aW9u\n"
+"U2VjdXJlU2VydmVyQ0EuY3J0MCMGCCsGAQUFBzABhhdodHRwOi8vb2NzcC5zZWN0\n"
+"aWdvLmNvbTCCAX4GCisGAQQB1nkCBAIEggFuBIIBagFoAHUAlpdkv1VYl633Q4do\n"
+"NwhCd+nwOtX2pPM2bkakPw/KqcYAAAGU02uUSwAABAMARjBEAiA7i6o+LpQjt6Ae\n"
+"EjltHhs/TiECnHd0xTeer/3vD1xgsAIgYlGwRot+SqEBCs//frx/YHTPwox9QLdy\n"
+"7GjTLWHfcMAAdwAZhtTHKKpv/roDb3gqTQGRqs4tcjEPrs5dcEEtJUzH1AAAAZTT\n"
+"a5PtAAAEAwBIMEYCIQDlrInx7J+3MfqgxB2+Fvq3dMlk1qj4chOw/+HkYVfG0AIh\n"
+"AMT+JKAQfUuIdBGxfryrGrwsOD3pRs1tyAyykdPGRgsTAHYAyzj3FYl8hKFEX1vB\n"
+"3fvJbvKaWc1HCmkFhbDLFMMUWOcAAAGU02uUJQAABAMARzBFAiEA1GKW92agDFNJ\n"
+"IYrMH3gaJdXsdIVpUcZOfxH1FksbuLECIFJCfslINhc53Q0TIMJHdcFOW2tgG4tB\n"
+"A1dL881tXbMnMCUGA1UdEQQeMByCCmdpdGh1Yi5jb22CDnd3dy5naXRodWIuY29t\n"
+"MAoGCCqGSM49BAMCA0cAMEQCIHGMp27BBBJ1356lCe2WYyzYIp/fAONQM3AkeE/f\n"
+"ym0sAiBtVfN3YgIZ+neHEfwcRhhz4uDpc8F+tKmtceWJSicMkA==\n"
 "-----END CERTIFICATE-----\n";
 
 // Print current time for debugging
@@ -114,7 +110,7 @@ void sync_time(void) {
         print_current_time();
     } else {
         ESP_LOGW(TAG, "Time synchronization failed");
-        // Set fallback time
+        // Set fallback time (current year)
         struct timeval tv = {
             .tv_sec = 1704067200, // January 1, 2024
             .tv_usec = 0
@@ -204,16 +200,16 @@ char* extract_version_from_json(const char* json_response) {
     return version;
 }
 
-// Get latest version from GitHub API with improved TLS configuration
+// Get latest version from GitHub API
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
-    // HTTP client configuration with relaxed certificate checks
+    // HTTP client configuration with GitHub's actual certificate
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
-        .timeout_ms = 15000,
-        .cert_pem = github_root_cert,
-        .skip_cert_common_name_check = true,  // Relaxed check
+        .timeout_ms = 20000,
+        .cert_pem = github_cert,
+        .skip_cert_common_name_check = false, // Use proper verification
         .keep_alive_enable = true,
     };
     
@@ -321,12 +317,12 @@ bool should_update(void) {
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update from GitHub...");
     
-    // HTTPS OTA configuration with relaxed certificate checks
+    // HTTPS OTA configuration with GitHub's actual certificate
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
-        .cert_pem = github_root_cert,
-        .skip_cert_common_name_check = true,  // Relaxed check
+        .cert_pem = github_cert,
+        .skip_cert_common_name_check = false, // Use proper verification
     };
     
     esp_https_ota_config_t ota_config = {
@@ -352,36 +348,6 @@ void perform_ota_update(void) {
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(err));
-        
-        // Try fallback with even more relaxed settings
-        ESP_LOGW(TAG, "Trying OTA fallback with minimal security...");
-        esp_http_client_config_t fallback_config = {
-            .url = FIRMWARE_BIN_URL,
-            .timeout_ms = 120000,
-            .cert_pem = NULL,  // No certificate verification
-            .skip_cert_common_name_check = true,
-        };
-        
-        esp_https_ota_config_t fallback_ota_config = {
-            .http_config = &fallback_config,
-            .bulk_flash_erase = true,
-        };
-        
-        err = esp_https_ota(&fallback_ota_config);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "OTA Fallback Successful! Rebooting...");
-            // Different blink pattern for fallback success
-            for(int i = 0; i < 15; i++) {
-                gpio_set_level(BLINK_GPIO, 1);
-                vTaskDelay(50 / portTICK_PERIOD_MS);
-                gpio_set_level(BLINK_GPIO, 0);
-                vTaskDelay(50 / portTICK_PERIOD_MS);
-            }
-            vTaskDelay(3000 / portTICK_PERIOD_MS);
-            esp_restart();
-        } else {
-            ESP_LOGE(TAG, "OTA Fallback also failed: %s", esp_err_to_name(err));
-        }
     }
 }
 
@@ -394,11 +360,9 @@ void blink_led_pattern(int times, int delay_ms) {
     }
 }
 
-// ... (keep all the same code as version 1.0.0 until the main loop)
-
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA ===");
-    ESP_LOGI(TAG, "Version: 1.0.1 - OTA Updated Version");
+    ESP_LOGI(TAG, "Initial Version: 1.0.0 (Manual Flash)");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
@@ -432,27 +396,19 @@ void app_main(void) {
         blink_led_pattern(5, 200);
         perform_ota_update();
     } else {
-        ESP_LOGI(TAG, "No update needed. Running current version 1.0.1");
+        ESP_LOGI(TAG, "No update needed. Running current version.");
     }
     
-    ESP_LOGI(TAG, "Starting main application - Triple blink pattern (version 1.0.1)");
+    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
     
-    // Main loop - Version 1.0.1: TRIPLE blink pattern (different from 1.0.0)
+    // Main loop - Version 1.0.0: Single blink pattern
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.1: TRIPLE blink pattern (visibly different from 1.0.0)
+        // Version 1.0.0: Single blink pattern
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(150 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2250 / portTICK_PERIOD_MS);
+        vTaskDelay(2800 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
@@ -468,7 +424,8 @@ void app_main(void) {
         
         // Show status every 30 seconds
         if (seconds_counter % 30 == 0) {
-            ESP_LOGI(TAG, "Status: Version 1.0.1 - Running for %d seconds", seconds_counter);
+            ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
+                     running_app->version, seconds_counter);
         }
     }
 }
