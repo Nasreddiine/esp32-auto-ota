@@ -23,7 +23,7 @@
 // GitHub OTA Configuration
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.0.1"  // Changed to 1.0.1 for testing
 
 // GitHub URLs - Use direct firmware URL for simplicity
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
@@ -195,8 +195,8 @@ void app_main(void) {
         
         counter++;
         
-        // Check for updates every 30 minutes
-        if (counter % 1800 == 0) { // 1800 seconds = 30 minutes
+        // CHANGED: Check for updates every 5 minutes instead of 30
+        if (counter % 300 == 0) { // 300 seconds = 5 minutes
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
@@ -211,7 +211,3 @@ void app_main(void) {
         }
     }
 }
-
-
-
-
