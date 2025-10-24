@@ -11,4 +11,5 @@ idf_component_register(
         esp_event
         driver
         app_update
+        cJSON
 )
