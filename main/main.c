@@ -234,7 +234,7 @@ void perform_ota_update(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 Auto-OTA Version 1.0.1 ===");
+    ESP_LOGI(TAG, "=== ESP32 Auto-OTA Version 1.0.0 ===");
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -265,20 +265,16 @@ void app_main(void) {
         ESP_LOGI(TAG, "No update needed - running latest version");
     }
     
-    ESP_LOGI(TAG, "Starting main application - DOUBLE BLINK pattern (Version 1.0.1)");
+    ESP_LOGI(TAG, "Starting main application - SINGLE BLINK pattern (Version 1.0.0)");
     
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.1: DOUBLE BLINK pattern (clearly different from 1.0.0)
-        // Pattern: blink-blink-pause (200ms ON, 200ms OFF, 200ms ON, 2400ms OFF)
+        // Version 1.0.0: CLEAR SINGLE BLINK pattern
+        // Pattern: ON for 500ms, OFF for 2500ms (3 second total cycle)
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2400 / portTICK_PERIOD_MS);
+        vTaskDelay(2500 / portTICK_PERIOD_MS);
         
         seconds_counter++;
         
@@ -292,7 +288,7 @@ void app_main(void) {
         }
         
         if (seconds_counter % 30 == 0) {
-            ESP_LOGI(TAG, "Status: Version 1.0.1 - Running for %d seconds", seconds_counter);
+            ESP_LOGI(TAG, "Status: Version 1.0.0 - Running for %d seconds", seconds_counter);
         }
     }
 }
