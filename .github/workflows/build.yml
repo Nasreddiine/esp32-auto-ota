@@ -49,9 +49,6 @@ jobs:
         elif [ -f "build/esp32_auto_ota.bin" ]; then
           cp build/esp32_auto_ota.bin firmware-release/firmware.bin
           echo "Using: esp32_auto_ota.bin"
-        elif [ -f "build/main.bin" ]; then
-          cp build/main.bin firmware-release/firmware.bin
-          echo "Using: main.bin"
         else
           # Find the first .bin file that's not bootloader or partition-table
           for file in build/*.bin; do
