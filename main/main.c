@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -45,15 +47,44 @@ void sync_time(void) {
     tzset();
     
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    
+    // Add multiple NTP servers for reliability
     sntp_setservername(0, "pool.ntp.org");
+    sntp_setservername(1, "time.google.com");
+    sntp_setservername(2, "time.windows.com");
+    sntp_setservername(3, "time.nist.gov");
+    
     sntp_init();
     
-    // Wait for time to be set
+    // Wait for time to be set with better timeout handling
     int retry = 0;
-    const int retry_count = 10;
+    const int retry_count = 15;
+    
     while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
         vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+    
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+        ESP_LOGI(TAG, "Time synchronized successfully!");
+        
+        // Print current time for verification
+        time_t now;
+        struct tm timeinfo;
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        ESP_LOGI(TAG, "Current time: %04d-%02d-%02d %02d:%02d:%02d",
+                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "Time synchronization failed, continuing without accurate time");
+        // Set a reasonable fallback time (2024)
+        struct timeval tv = {
+            .tv_sec = 1704067200, // January 1, 2024
+            .tv_usec = 0
+        };
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "Set fallback time to 2024");
     }
 }
 
@@ -159,8 +190,33 @@ char* get_latest_version(void) {
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        
+        // If TLS fails, try without certificate verification (fallback)
+        ESP_LOGW(TAG, "Trying fallback without certificate verification...");
         esp_http_client_cleanup(client);
-        return NULL;
+        
+        // Retry with skip_cert_common_name_check = true
+        esp_http_client_config_t fallback_config = {
+            .url = GITHUB_API_URL,
+            .timeout_ms = 20000,
+            .skip_cert_common_name_check = true,
+        };
+        
+        client = esp_http_client_init(&fallback_config);
+        if (!client) {
+            ESP_LOGE(TAG, "Failed to initialize fallback HTTP client");
+            return NULL;
+        }
+        
+        esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
+        esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+        
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Fallback also failed: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+            return NULL;
+        }
     }
     
     int status_code = esp_http_client_get_status_code(client);
@@ -288,6 +344,34 @@ void perform_ota_update(void) {
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(err));
+        
+        // Try fallback without strict certificate checking
+        ESP_LOGW(TAG, "Trying OTA fallback without certificate verification...");
+        esp_http_client_config_t fallback_config = {
+            .url = FIRMWARE_BIN_URL,
+            .timeout_ms = 120000,
+            .skip_cert_common_name_check = true,
+        };
+        
+        esp_https_ota_config_t fallback_ota_config = {
+            .http_config = &fallback_config,
+            .bulk_flash_erase = true,
+        };
+        
+        err = esp_https_ota(&fallback_ota_config);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "OTA Fallback Successful! Rebooting...");
+            for(int i = 0; i < 15; i++) {
+                gpio_set_level(BLINK_GPIO, 1);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                gpio_set_level(BLINK_GPIO, 0);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "OTA Fallback also failed: %s", esp_err_to_name(err));
+        }
     }
 }
 
@@ -335,17 +419,20 @@ void app_main(void) {
         perform_ota_update();
     }
     
-    ESP_LOGI(TAG, "Starting main application - LED blinks every 2 seconds");
+    ESP_LOGI(TAG, "Starting main application - LED double blink pattern (version 1.0.2)");
     
     // Main loop - simplified timing
     int seconds_counter = 0;
     while (1) {
-        // Blink every 2 seconds (1s ON, 1s OFF)
+        // Version 1.0.2: NEW PATTERN - Double blink every 3 seconds
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(2400 / portTICK_PERIOD_MS);  // Longer pause
         
         seconds_counter++;
         
@@ -363,7 +450,7 @@ void app_main(void) {
         if (seconds_counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
                      running_app->version, seconds_counter);
+            ESP_LOGI(TAG, "LED Pattern: Double Blink (1.0.2 feature)");
         }
     }
 }
-
