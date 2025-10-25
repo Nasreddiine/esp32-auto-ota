@@ -11,6 +11,4 @@ idf_component_register(
         esp_event
         driver
         app_update
-        mbedtls
-        esp_crt_bundle
 )
