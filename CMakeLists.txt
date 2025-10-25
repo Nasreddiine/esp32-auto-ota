@@ -10,8 +10,5 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 endif()
 
-# Enable certificate bundle
-set(ESP_TLS_USING_MBEDTLS true)
-
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32_auto_ota)
