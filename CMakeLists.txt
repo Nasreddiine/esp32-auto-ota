@@ -10,8 +10,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 endif()
 
-# Set project version to 1.0.1
-set(PROJECT_VER "1.0.1")
+# Enable certificate bundle
+set(ESP_TLS_USING_MBEDTLS true)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32_auto_ota)
