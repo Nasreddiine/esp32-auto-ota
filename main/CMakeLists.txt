@@ -11,7 +11,6 @@ idf_component_register(
         esp_event
         driver
         app_update
+        mbedtls
+        esp_crt_bundle
 )
-
-# Set component version to 1.0.1
-set(COMPONENT_VER "1.0.1")
