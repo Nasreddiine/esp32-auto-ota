@@ -12,7 +12,6 @@
 #include "esp_https_ota.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
-#include "esp_crt_bundle.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -111,8 +110,7 @@ void perform_ota_update(void) {
         .timeout_ms = 90000,
         .buffer_size_tx = 4096,
         .buffer_size = 4096,
-        .crt_bundle_attach = esp_crt_bundle_attach,  // Certificate bundle for TLS
-        .skip_cert_common_name_check = false,
+        .skip_cert_common_name_check = true,  // Skip certificate verification for now
     };
     
     esp_https_ota_config_t ota_config = {
@@ -122,7 +120,7 @@ void perform_ota_update(void) {
         .max_http_request_size = 4096,
     };
     
-    ESP_LOGI(TAG, "Initializing OTA with certificate bundle...");
+    ESP_LOGI(TAG, "Initializing OTA...");
     esp_err_t ret = esp_https_ota(&ota_config);
     
     if (ret == ESP_OK) {
@@ -232,6 +230,8 @@ void app_main(void) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
                 blink_led_pattern(8, 150);
                 perform_ota_update();
+            } else {
+                ESP_LOGI(TAG, "No update available, continuing normal operation");
             }
         }
         
