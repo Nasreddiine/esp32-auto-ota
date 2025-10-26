@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -12,6 +14,7 @@
 #include "esp_https_ota.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "esp_sntp.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -23,38 +26,81 @@
 // GitHub OTA Configuration
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
-#define FIRMWARE_VERSION "1.0.2"  // New version with TLS fix
+
+// Update check interval (1 minute 30 seconds = 90 seconds)
+#define UPDATE_CHECK_INTERVAL_SECONDS 90
 
 // GitHub URLs
+#define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
-
-// Let's Encrypt Root Certificate (simplified for GitHub)
-static const char *GITHUB_ROOT_CERT = \
-"-----BEGIN CERTIFICATE-----\n" \
-"MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF\n" \
-"ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\n" \
-"b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL\n" \
-"MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\n" \
-"b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj\n" \
-"ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM\n" \
-"9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw\n" \
-"IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6\n" \
-"VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L\n" \
-"93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm\n" \
-"jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC\n" \
-"AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA\n" \
-"A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI\n" \
-"U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs\n" \
-"N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv\n" \
-"o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU\n" \
-"5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy\n" \
-"rqXRfboQnoZsG4q5WTP468SQvvG5\n" \
-"-----END CERTIFICATE-----\n";
 
 static const char *TAG = "OTA_APP";
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
+
+// GitHub's root certificate (DigiCert Global Root CA)
+static const char *github_root_cert = 
+"-----BEGIN CERTIFICATE-----\n"
+"MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n"
+"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
+"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n"
+"QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n"
+"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n"
+"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n"
+"9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n"
+"CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n"
+"nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n"
+"43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n"
+"T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n"
+"gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n"
+"BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n"
+"TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n"
+"DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n"
+"hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n"
+"06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n"
+"PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n"
+"YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk\n"
+"CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=\n"
+"-----END CERTIFICATE-----\n";
+
+// Sync time for TLS certificate validation
+void sync_time(void) {
+    ESP_LOGI(TAG, "Setting time from SNTP");
+    setenv("TZ", "UTC", 1);
+    tzset();
+    
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    
+    // Add multiple NTP servers for reliability
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_setservername(1, "time.google.com");
+    sntp_setservername(2, "time.windows.com");
+    
+    sntp_init();
+    
+    // Wait for time to be set
+    int retry = 0;
+    const int retry_count = 15;
+    
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+    
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+        ESP_LOGI(TAG, "Time synchronized successfully!");
+    } else {
+        ESP_LOGW(TAG, "Time synchronization failed");
+        // Set fallback time
+        struct timeval tv = {
+            .tv_sec = 1704067200, // January 1, 2024
+            .tv_usec = 0
+        };
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "Set fallback time to 2024");
+    }
+}
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
@@ -104,84 +150,190 @@ void wifi_init(void) {
     ESP_LOGI(TAG, "WiFi started");
 }
 
-// Check if we should update by comparing with current running firmware
+// Simple string extraction for version from JSON
+char* extract_version_from_json(const char* json_response) {
+    const char* tag_key = "\"tag_name\":\"";
+    char* tag_start = strstr(json_response, tag_key);
+    
+    if (!tag_start) {
+        ESP_LOGE(TAG, "tag_name not found in JSON response");
+        return NULL;
+    }
+    
+    tag_start += strlen(tag_key);
+    char* tag_end = strchr(tag_start, '"');
+    
+    if (!tag_end) {
+        ESP_LOGE(TAG, "Invalid tag_name format in JSON");
+        return NULL;
+    }
+    
+    size_t version_len = tag_end - tag_start;
+    char* version = malloc(version_len + 1);
+    if (!version) {
+        ESP_LOGE(TAG, "Failed to allocate memory for version");
+        return NULL;
+    }
+    
+    strncpy(version, tag_start, version_len);
+    version[version_len] = '\0';
+    
+    return version;
+}
+
+// Get latest version from GitHub API
+char* get_latest_version(void) {
+    ESP_LOGI(TAG, "Fetching latest version from GitHub...");
+    
+    esp_http_client_config_t config = {
+        .url = GITHUB_API_URL,
+        .timeout_ms = 20000,
+        .cert_pem = github_root_cert,
+        .skip_cert_common_name_check = false,
+        .keep_alive_enable = true,
+        .buffer_size_tx = 4096,
+        .buffer_size = 4096,
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        return NULL;
+    }
+    
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
+    esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+    
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int status_code = esp_http_client_get_status_code(client);
+    ESP_LOGI(TAG, "HTTP Status: %d", status_code);
+    
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request failed with status: %d", status_code);
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int content_length = esp_http_client_get_content_length(client);
+    if (content_length <= 0) {
+        content_length = 4096; // Default size
+    }
+    
+    if (content_length > 8192) {
+        content_length = 8192; // Limit size
+    }
+    
+    char *response = malloc(content_length + 1);
+    if (!response) {
+        ESP_LOGE(TAG, "Failed to allocate memory for response");
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int read_len = esp_http_client_read(client, response, content_length);
+    if (read_len <= 0) {
+        ESP_LOGE(TAG, "Failed to read HTTP response");
+        free(response);
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    response[read_len] = '\0';
+    
+    esp_http_client_cleanup(client);
+    
+    char *latest_version = extract_version_from_json(response);
+    
+    if (latest_version) {
+        ESP_LOGI(TAG, "Latest version on GitHub: %s", latest_version);
+    } else {
+        ESP_LOGE(TAG, "Failed to extract version from response");
+    }
+    
+    free(response);
+    return latest_version;
+}
+
+bool is_newer_version(const char *current, const char *latest) {
+    ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
+    return strcmp(current, latest) != 0;
+}
+
 bool should_update(void) {
     ESP_LOGI(TAG, "Checking if update needed...");
     
-    // Get current running firmware info
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
-    ESP_LOGI(TAG, "This firmware: %s", FIRMWARE_VERSION);
     
-    // Only update if the new version is different (prevents downgrades)
-    if (strcmp(running_app->version, FIRMWARE_VERSION) != 0) {
-        ESP_LOGI(TAG, "Update needed: running %s, want %s", running_app->version, FIRMWARE_VERSION);
-        return true;
+    char *latest_version = get_latest_version();
+    if (!latest_version) {
+        ESP_LOGE(TAG, "Failed to get latest version from GitHub");
+        return false;
     }
     
-    ESP_LOGI(TAG, "No update needed - already running version %s", FIRMWARE_VERSION);
-    return false;
+    bool update_needed = is_newer_version(running_app->version, latest_version);
+    
+    if (update_needed) {
+        ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
+                 running_app->version, latest_version);
+    } else {
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
+    }
+    
+    free(latest_version);
+    return update_needed;
 }
 
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update from GitHub...");
-    ESP_LOGI(TAG, "Download URL: %s", FIRMWARE_BIN_URL);
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
-        .timeout_ms = 90000,
+        .timeout_ms = 120000,
+        .cert_pem = github_root_cert,
+        .skip_cert_common_name_check = false,
         .buffer_size_tx = 4096,
         .buffer_size = 4096,
-        .cert_pem = GITHUB_ROOT_CERT,  // Use proper certificate
-        .skip_cert_common_name_check = false,  // Enable certificate verification
     };
     
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
         .bulk_flash_erase = true,
-        .partial_http_download = true,
-        .max_http_request_size = 4096,
+        .partial_http_download = false,
     };
     
-    ESP_LOGI(TAG, "Initializing OTA with certificate verification...");
+    ESP_LOGI(TAG, "Initializing HTTPS OTA...");
     esp_err_t ret = esp_https_ota(&ota_config);
     
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "OTA Update Successful! Rebooting in 3 seconds...");
+        ESP_LOGI(TAG, "OTA Update Successful! Rebooting...");
         
-        // Blink rapidly to indicate success
-        for(int i = 0; i < 10; i++) {
+        // Fast blinking to indicate success
+        for(int i = 0; i < 20; i++) {
             gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
             gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
         }
         
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "Error code: 0x%x", ret);
         
-        // Try fallback without certificate for testing
-        ESP_LOGI(TAG, "Trying fallback method without certificate...");
-        esp_http_client_config_t fallback_config = {
-            .url = FIRMWARE_BIN_URL,
-            .timeout_ms = 90000,
-            .skip_cert_common_name_check = true,
-        };
-        
-        esp_https_ota_config_t fallback_ota_config = {
-            .http_config = &fallback_config,
-        };
-        
-        esp_err_t fallback_ret = esp_https_ota(&fallback_ota_config);
-        if (fallback_ret == ESP_OK) {
-            ESP_LOGI(TAG, "Fallback OTA Successful! Rebooting...");
-            vTaskDelay(3000 / portTICK_PERIOD_MS);
-            esp_restart();
-        } else {
-            ESP_LOGE(TAG, "Fallback also failed: %s", esp_err_to_name(fallback_ret));
+        // Slow blinking to indicate failure
+        for(int i = 0; i < 10; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
         }
     }
 }
@@ -196,9 +348,11 @@ void blink_led_pattern(int times, int delay_ms) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA ===");
-    ESP_LOGI(TAG, "Version: %s", FIRMWARE_VERSION);
-    ESP_LOGI(TAG, "Repo: %s/%s", GITHUB_USER, GITHUB_REPO);
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
+    
+    const esp_app_desc_t *running_app = esp_ota_get_app_description();
+    ESP_LOGI(TAG, "Running version: %s", running_app->version);
+    ESP_LOGI(TAG, "Update check interval: %d seconds", UPDATE_CHECK_INTERVAL_SECONDS);
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -211,7 +365,6 @@ void app_main(void) {
     // Setup LED
     gpio_reset_pin(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-    ESP_LOGI(TAG, "LED initialized on GPIO %d", BLINK_GPIO);
     
     // Connect to WiFi
     wifi_init();
@@ -219,46 +372,43 @@ void app_main(void) {
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected!");
     
-    // Check if we need to update
+    // Sync time for TLS
+    sync_time();
+    
+    // Initial update check
     if (should_update()) {
-        ESP_LOGI(TAG, "Update needed! Starting OTA process...");
-        blink_led_pattern(5, 200); // Fast blink = updating
+        ESP_LOGI(TAG, "Update needed! Starting OTA...");
+        blink_led_pattern(5, 200);
         perform_ota_update();
-    } else {
-        ESP_LOGI(TAG, "Running latest version %s", FIRMWARE_VERSION);
     }
     
-    ESP_LOGI(TAG, "Starting main application");
+    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
     
-    // Main application loop - 3 second blink (1500ms on, 1500ms off)
-    int counter = 0;
+    // Main loop
+    int seconds_counter = 0;
     while (1) {
-        // Normal operation - 3 second blink
+        // Version 1.0.0: Single blink pattern
         gpio_set_level(BLINK_GPIO, 1);
-        ESP_LOGI(TAG, "LED ON - Version %s - Cycle: %d", FIRMWARE_VERSION, counter);
-        vTaskDelay(1500 / portTICK_PERIOD_MS);
-        
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        ESP_LOGI(TAG, "LED OFF - Version %s - Cycle: %d", FIRMWARE_VERSION, counter);
-        vTaskDelay(1500 / portTICK_PERIOD_MS);
+        vTaskDelay(2800 / portTICK_PERIOD_MS);
         
-        counter++;
+        seconds_counter++;
         
-        // Check for updates every 2 minutes (40 cycles * 3s = 120s)
-        if (counter % 40 == 0) {
+        // Check for updates every 90 seconds
+        if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
                 blink_led_pattern(8, 150);
                 perform_ota_update();
-            } else {
-                ESP_LOGI(TAG, "No update available");
             }
         }
         
-        // Show status every 10 cycles (30 seconds)
-        if (counter % 10 == 0) {
-            ESP_LOGI(TAG, "Status: Running version %s - Total cycles: %d", FIRMWARE_VERSION, counter);
+        // Show status every 30 seconds
+        if (seconds_counter % 30 == 0) {
+            ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
+                     running_app->version, seconds_counter);
         }
     }
 }
