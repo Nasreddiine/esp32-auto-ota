@@ -10,5 +10,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 endif()
 
+# Set project version to 1.0.0
+set(PROJECT_VER "1.0.0")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32_auto_ota)
