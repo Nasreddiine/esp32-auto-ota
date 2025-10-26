@@ -455,9 +455,9 @@ void app_main(void) {
     while (1) {
         // Version 1.0.0: Single blink pattern every 3 seconds
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2800 / portTICK_PERIOD_MS);
+        vTaskDelay(50 / portTICK_PERIOD_MS);
         
         seconds_counter += 3; // Each loop iteration takes 3 seconds
         
@@ -478,3 +478,4 @@ void app_main(void) {
         }
     }
 }
+
