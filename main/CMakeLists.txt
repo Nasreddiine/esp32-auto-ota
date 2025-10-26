@@ -11,6 +11,9 @@ idf_component_register(
         esp_event
         driver
         app_update
+        esp_partition
+        bootloader_support
+        efuse
 )
 
 set(COMPONENT_VER "1.0.0")
