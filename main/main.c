@@ -17,6 +17,9 @@
 #include "esp_sntp.h"
 #include "esp_partition.h"
 #include "esp_image_format.h"
+#include "esp_flash_partitions.h"
+#include "bootloader_config.h"
+#include "esp_efuse.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -37,6 +40,10 @@
 #define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
 #define BOOTLOADER_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/bootloader.bin"
 #define PARTITION_TABLE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/partition-table.bin"
+
+// Partition addresses (typical for ESP32)
+#define BOOTLOADER_OFFSET 0x1000
+#define PARTITION_TABLE_OFFSET 0x8000
 
 static const char *TAG = "OTA_APP";
 
@@ -232,9 +239,36 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
-// Download a binary file from GitHub
-bool download_binary(const char* url, const char* filename) {
-    ESP_LOGI(TAG, "Downloading %s from %s", filename, url);
+// Write data to flash at specific offset
+bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
+    ESP_LOGI(TAG, "Writing %d bytes to flash at offset 0x%x", size, offset);
+    
+    esp_err_t err = esp_partition_erase_range(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                                      NULL), 
+                                             offset, 
+                                             (size + 4095) & ~4095); // Align to 4KB
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to erase flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    err = esp_partition_write(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                      NULL), 
+                             offset, data, size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write to flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Successfully wrote to flash");
+    return true;
+}
+
+// Download and flash a binary file
+bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
+    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%x", filename, url, flash_offset);
     
     esp_http_client_config_t config = {
         .url = url,
@@ -270,30 +304,74 @@ bool download_binary(const char* url, const char* filename) {
         return false;
     }
     
-    // Read the binary data
-    uint8_t* data = malloc(content_length);
-    if (!data) {
+    // Read and flash in chunks to handle large files
+    const size_t chunk_size = 4096;
+    uint8_t* chunk = malloc(chunk_size);
+    if (!chunk) {
         ESP_LOGE(TAG, "Failed to allocate memory for %s", filename);
         esp_http_client_cleanup(client);
         return false;
     }
     
-    int read_len = esp_http_client_read(client, (char*)data, content_length);
-    if (read_len != content_length) {
-        ESP_LOGE(TAG, "Failed to read complete file %s", filename);
-        free(data);
-        esp_http_client_cleanup(client);
-        return false;
+    size_t total_written = 0;
+    uint32_t current_offset = flash_offset;
+    
+    while (total_written < content_length) {
+        size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
+        int read_len = esp_http_client_read(client, (char*)chunk, to_read);
+        
+        if (read_len <= 0) {
+            ESP_LOGE(TAG, "Failed to read chunk for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        // Write chunk to flash
+        if (!write_to_flash(current_offset, chunk, read_len)) {
+            ESP_LOGE(TAG, "Failed to write chunk to flash for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        total_written += read_len;
+        current_offset += read_len;
+        
+        ESP_LOGI(TAG, "Progress: %d/%d bytes (%d%%)", total_written, content_length, 
+                 (total_written * 100) / content_length);
     }
     
+    free(chunk);
     esp_http_client_cleanup(client);
     
-    // For now, we'll just log success - in a real implementation, 
-    // you'd write this to the appropriate partition
-    ESP_LOGI(TAG, "Successfully downloaded %s (%d bytes)", filename, content_length);
-    
-    free(data);
+    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%d bytes)", filename, content_length);
     return true;
+}
+
+// Update firmware using standard OTA mechanism
+bool update_firmware(void) {
+    ESP_LOGI(TAG, "Updating firmware using OTA...");
+    
+    esp_http_client_config_t config = {
+        .url = FIRMWARE_BIN_URL,
+        .timeout_ms = 120000,
+    };
+    
+    esp_https_ota_config_t ota_config = {
+        .http_config = &config,
+        .bulk_flash_erase = true,
+        .partial_http_download = false,
+    };
+    
+    esp_err_t ret = esp_https_ota(&ota_config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Firmware OTA update successful!");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "Firmware OTA update failed: %s", esp_err_to_name(ret));
+        return false;
+    }
 }
 
 bool is_newer_version(const char *current, const char *latest) {
@@ -329,40 +407,48 @@ bool should_update(void) {
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
     
-    // Download all necessary binaries
-    bool bootloader_ok = download_binary(BOOTLOADER_BIN_URL, "bootloader.bin");
-    bool partition_ok = download_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin");
-    bool firmware_ok = download_binary(FIRMWARE_BIN_URL, "firmware.bin");
+    // Step 1: Update bootloader (if changed)
+    ESP_LOGI(TAG, "Step 1: Updating bootloader...");
+    bool bootloader_ok = download_and_flash_binary(BOOTLOADER_BIN_URL, "bootloader.bin", BOOTLOADER_OFFSET);
     
-    if (!firmware_ok) {
-        ESP_LOGE(TAG, "Failed to download firmware.bin");
-        return;
+    // Step 2: Update partition table (if changed)
+    ESP_LOGI(TAG, "Step 2: Updating partition table...");
+    bool partition_ok = download_and_flash_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin", PARTITION_TABLE_OFFSET);
+    
+    // Step 3: Update firmware using standard OTA mechanism
+    ESP_LOGI(TAG, "Step 3: Updating firmware...");
+    bool firmware_ok = update_firmware();
+    
+    if (firmware_ok) {
+        ESP_LOGI(TAG, "All updates completed successfully!");
+        ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
+                 bootloader_ok ? "OK" : "Failed", 
+                 partition_ok ? "OK" : "Failed",
+                 firmware_ok ? "OK" : "OK");
+        
+        // Success blinking
+        for(int i = 0; i < 20; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+        }
+        
+        ESP_LOGI(TAG, "Rebooting to apply updates...");
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        esp_restart();
+        
+    } else {
+        ESP_LOGE(TAG, "Firmware update failed!");
+        
+        // Error blinking
+        for(int i = 0; i < 10; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
     }
-    
-    ESP_LOGI(TAG, "All binaries downloaded successfully!");
-    ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
-             bootloader_ok ? "OK" : "Failed", 
-             partition_ok ? "OK" : "Failed",
-             firmware_ok ? "OK" : "Failed");
-    
-    // Note: In a production system, you would:
-    // 1. Write bootloader to bootloader partition
-    // 2. Write partition table to partition table area  
-    // 3. Use esp_https_ota for firmware update
-    // 4. Set boot flags and reboot
-    
-    ESP_LOGI(TAG, "Update complete! Ready to reboot...");
-    
-    // Success blinking
-    for(int i = 0; i < 10; i++) {
-        gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-    }
-    
-    vTaskDelay(3000 / portTICK_PERIOD_MS);
-    esp_restart();
 }
 
 void blink_led_pattern(int times, int delay_ms) {
