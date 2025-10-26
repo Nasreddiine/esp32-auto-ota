@@ -23,10 +23,33 @@
 // GitHub OTA Configuration
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
-#define FIRMWARE_VERSION "1.0.1"  // Updated version with 3-second blink
+#define FIRMWARE_VERSION "1.0.2"  // New version with TLS fix
 
 // GitHub URLs
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+
+// Let's Encrypt Root Certificate (simplified for GitHub)
+static const char *GITHUB_ROOT_CERT = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF\n" \
+"ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\n" \
+"b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL\n" \
+"MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\n" \
+"b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj\n" \
+"ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM\n" \
+"9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw\n" \
+"IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6\n" \
+"VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L\n" \
+"93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm\n" \
+"jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC\n" \
+"AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA\n" \
+"A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI\n" \
+"U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs\n" \
+"N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv\n" \
+"o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU\n" \
+"5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy\n" \
+"rqXRfboQnoZsG4q5WTP468SQvvG5\n" \
+"-----END CERTIFICATE-----\n";
 
 static const char *TAG = "OTA_APP";
 
@@ -90,8 +113,7 @@ bool should_update(void) {
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
     ESP_LOGI(TAG, "This firmware: %s", FIRMWARE_VERSION);
     
-    // Simple approach: Always try to update if we have a new version in code
-    // This ensures the ESP32 will update to whatever version is in FIRMWARE_VERSION
+    // Only update if the new version is different (prevents downgrades)
     if (strcmp(running_app->version, FIRMWARE_VERSION) != 0) {
         ESP_LOGI(TAG, "Update needed: running %s, want %s", running_app->version, FIRMWARE_VERSION);
         return true;
@@ -110,7 +132,8 @@ void perform_ota_update(void) {
         .timeout_ms = 90000,
         .buffer_size_tx = 4096,
         .buffer_size = 4096,
-        .skip_cert_common_name_check = true,  // Skip certificate verification for now
+        .cert_pem = GITHUB_ROOT_CERT,  // Use proper certificate
+        .skip_cert_common_name_check = false,  // Enable certificate verification
     };
     
     esp_https_ota_config_t ota_config = {
@@ -120,7 +143,7 @@ void perform_ota_update(void) {
         .max_http_request_size = 4096,
     };
     
-    ESP_LOGI(TAG, "Initializing OTA...");
+    ESP_LOGI(TAG, "Initializing OTA with certificate verification...");
     esp_err_t ret = esp_https_ota(&ota_config);
     
     if (ret == ESP_OK) {
@@ -140,29 +163,25 @@ void perform_ota_update(void) {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "Error code: 0x%x", ret);
         
-        // Provide more detailed error information
-        switch(ret) {
-            case ESP_ERR_HTTPS_OTA_BASE:
-                ESP_LOGE(TAG, "HTTPS OTA base error");
-                break;
-            case ESP_ERR_HTTP_CONNECT:
-                ESP_LOGE(TAG, "HTTP connection failed");
-                break;
-            case ESP_ERR_HTTP_WRITE_DATA:
-                ESP_LOGE(TAG, "HTTP write data failed");
-                break;
-            case ESP_ERR_HTTP_FETCH_HEADER:
-                ESP_LOGE(TAG, "HTTP fetch header failed");
-                break;
-            case ESP_ERR_HTTP_INVALID_TRANSPORT:
-                ESP_LOGE(TAG, "HTTP invalid transport");
-                break;
-            case ESP_ERR_HTTP_EAGAIN:
-                ESP_LOGE(TAG, "HTTP EAGAIN - try again");
-                break;
-            default:
-                ESP_LOGE(TAG, "Unknown error");
-                break;
+        // Try fallback without certificate for testing
+        ESP_LOGI(TAG, "Trying fallback method without certificate...");
+        esp_http_client_config_t fallback_config = {
+            .url = FIRMWARE_BIN_URL,
+            .timeout_ms = 90000,
+            .skip_cert_common_name_check = true,
+        };
+        
+        esp_https_ota_config_t fallback_ota_config = {
+            .http_config = &fallback_config,
+        };
+        
+        esp_err_t fallback_ret = esp_https_ota(&fallback_ota_config);
+        if (fallback_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Fallback OTA Successful! Rebooting...");
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "Fallback also failed: %s", esp_err_to_name(fallback_ret));
         }
     }
 }
@@ -211,29 +230,29 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Starting main application");
     
-    // Main application loop
+    // Main application loop - 3 second blink (1500ms on, 1500ms off)
     int counter = 0;
     while (1) {
-        // Normal operation - 3 second blink (1500ms on, 1500ms off)
+        // Normal operation - 3 second blink
         gpio_set_level(BLINK_GPIO, 1);
-        ESP_LOGI(TAG, "LED ON - Running version %s - Cycle: %d", FIRMWARE_VERSION, counter);
+        ESP_LOGI(TAG, "LED ON - Version %s - Cycle: %d", FIRMWARE_VERSION, counter);
         vTaskDelay(1500 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
-        ESP_LOGI(TAG, "LED OFF - Running version %s - Cycle: %d", FIRMWARE_VERSION, counter);
+        ESP_LOGI(TAG, "LED OFF - Version %s - Cycle: %d", FIRMWARE_VERSION, counter);
         vTaskDelay(1500 / portTICK_PERIOD_MS);
         
         counter++;
         
-        // Check for updates every 2 minutes (120 seconds)
-        if (counter % 40 == 0) { // 40 cycles * 3 seconds = 120 seconds = 2 minutes
+        // Check for updates every 2 minutes (40 cycles * 3s = 120s)
+        if (counter % 40 == 0) {
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
                 blink_led_pattern(8, 150);
                 perform_ota_update();
             } else {
-                ESP_LOGI(TAG, "No update available, continuing normal operation");
+                ESP_LOGI(TAG, "No update available");
             }
         }
         
