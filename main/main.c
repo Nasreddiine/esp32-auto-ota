@@ -23,7 +23,7 @@
 // GitHub OTA Configuration
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
-#define FIRMWARE_VERSION "1.0.0"  // Initial version
+#define FIRMWARE_VERSION "1.0.1"  // Updated version with 3-second blink
 
 // GitHub URLs
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
@@ -214,17 +214,19 @@ void app_main(void) {
     // Main application loop
     int counter = 0;
     while (1) {
-        // Normal operation - 1 second blink (500ms on, 500ms off)
+        // Normal operation - 3 second blink (1500ms on, 1500ms off)
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "LED ON - Running version %s - Cycle: %d", FIRMWARE_VERSION, counter);
+        vTaskDelay(1500 / portTICK_PERIOD_MS);
         
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "LED OFF - Running version %s - Cycle: %d", FIRMWARE_VERSION, counter);
+        vTaskDelay(1500 / portTICK_PERIOD_MS);
         
         counter++;
         
         // Check for updates every 2 minutes (120 seconds)
-        if (counter % 120 == 0) { // 120 seconds = 2 minutes
+        if (counter % 40 == 0) { // 40 cycles * 3 seconds = 120 seconds = 2 minutes
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
@@ -235,8 +237,8 @@ void app_main(void) {
             }
         }
         
-        // Show status every 30 cycles (30 seconds)
-        if (counter % 30 == 0) {
+        // Show status every 10 cycles (30 seconds)
+        if (counter % 10 == 0) {
             ESP_LOGI(TAG, "Status: Running version %s - Total cycles: %d", FIRMWARE_VERSION, counter);
         }
     }
