@@ -39,29 +39,38 @@ static const char *TAG = "OTA_APP";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// GitHub's root certificate (DigiCert Global Root CA)
+// GitHub certificate (ISRG Root X1)
 static const char *github_root_cert = 
 "-----BEGIN CERTIFICATE-----\n"
-"MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n"
-"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
-"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n"
-"QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n"
-"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n"
-"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n"
-"9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n"
-"CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n"
-"nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n"
-"43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n"
-"T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n"
-"gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n"
-"BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n"
-"TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n"
-"DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n"
-"hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n"
-"06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n"
-"PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n"
-"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\n"
+"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\n"
 "-----END CERTIFICATE-----\n";
 
 // Sync time for TLS certificate validation
@@ -185,6 +194,7 @@ char* extract_version_from_json(const char* json_response) {
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
+    // First try with certificate
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
         .timeout_ms = 20000,
@@ -208,8 +218,34 @@ char* get_latest_version(void) {
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        
+        // Fallback: try without certificate
+        ESP_LOGW(TAG, "Trying without certificate verification...");
         esp_http_client_cleanup(client);
-        return NULL;
+        
+        esp_http_client_config_t fallback_config = {
+            .url = GITHUB_API_URL,
+            .timeout_ms = 20000,
+            .cert_pem = NULL,
+            .skip_cert_common_name_check = true,
+        };
+        
+        client = esp_http_client_init(&fallback_config);
+        if (!client) {
+            ESP_LOGE(TAG, "Failed to initialize fallback HTTP client");
+            return NULL;
+        }
+        
+        esp_http_client_set_method(client, HTTP_METHOD_GET);
+        esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
+        esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+        
+        err = esp_http_client_perform(client);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Fallback HTTP request also failed: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+            return NULL;
+        }
     }
     
     int status_code = esp_http_client_get_status_code(client);
@@ -223,11 +259,11 @@ char* get_latest_version(void) {
     
     int content_length = esp_http_client_get_content_length(client);
     if (content_length <= 0) {
-        content_length = 4096; // Default size
+        content_length = 4096;
     }
     
     if (content_length > 8192) {
-        content_length = 8192; // Limit size
+        content_length = 8192;
     }
     
     char *response = malloc(content_length + 1);
@@ -294,6 +330,7 @@ bool should_update(void) {
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update from GitHub...");
     
+    // First try with certificate
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
@@ -328,12 +365,41 @@ void perform_ota_update(void) {
     } else {
         ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(ret));
         
-        // Slow blinking to indicate failure
-        for(int i = 0; i < 10; i++) {
-            gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-            gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
+        // Try fallback without certificate
+        ESP_LOGW(TAG, "Trying OTA fallback without certificate...");
+        esp_http_client_config_t fallback_config = {
+            .url = FIRMWARE_BIN_URL,
+            .timeout_ms = 120000,
+            .cert_pem = NULL,
+            .skip_cert_common_name_check = true,
+        };
+        
+        esp_https_ota_config_t fallback_ota_config = {
+            .http_config = &fallback_config,
+            .bulk_flash_erase = true,
+        };
+        
+        ret = esp_https_ota(&fallback_ota_config);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "OTA Fallback Successful! Rebooting...");
+            for(int i = 0; i < 15; i++) {
+                gpio_set_level(BLINK_GPIO, 1);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                gpio_set_level(BLINK_GPIO, 0);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "OTA Fallback also failed: %s", esp_err_to_name(ret));
+            
+            // Slow blinking to indicate failure
+            for(int i = 0; i < 10; i++) {
+                gpio_set_level(BLINK_GPIO, 1);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                gpio_set_level(BLINK_GPIO, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+            }
         }
     }
 }
@@ -348,7 +414,7 @@ void blink_led_pattern(int times, int delay_ms) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.1 ===");
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
@@ -382,18 +448,18 @@ void app_main(void) {
         perform_ota_update();
     }
     
-    ESP_LOGI(TAG, "Starting main application - 2-second blink pattern (version 1.0.1)");
+    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
     
     // Main loop
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.1: Blink every 2 seconds (200ms on, 1800ms off)
+        // Version 1.0.0: Single blink pattern every 3 seconds
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);  // LED ON for 200ms
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(1800 / portTICK_PERIOD_MS); // LED OFF for 1800ms
+        vTaskDelay(2800 / portTICK_PERIOD_MS);
         
-        seconds_counter += 2; // Each loop iteration takes 2 seconds
+        seconds_counter += 3; // Each loop iteration takes 3 seconds
         
         // Check for updates every 90 seconds
         if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
