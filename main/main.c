@@ -414,7 +414,7 @@ void blink_led_pattern(int times, int delay_ms) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.1 ===");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
@@ -448,18 +448,18 @@ void app_main(void) {
         perform_ota_update();
     }
     
-    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
+    ESP_LOGI(TAG, "Starting main application - 1-second blink pattern (version 1.0.1)");
     
     // Main loop
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.0: Single blink pattern every 3 seconds
+        // Version 1.0.1: Blink every 1 second (500ms ON, 500ms OFF)
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);  // LED ON for 500ms
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);  // LED OFF for 500ms
         
-        seconds_counter += 3; // Each loop iteration takes 3 seconds
+        seconds_counter += 1; // Each loop iteration takes 1 second
         
         // Check for updates every 90 seconds
         if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
@@ -478,4 +478,3 @@ void app_main(void) {
         }
     }
 }
-
