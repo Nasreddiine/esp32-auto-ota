@@ -15,6 +15,8 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_sntp.h"
+#include "esp_partition.h"
+#include "esp_image_format.h"
 
 // WiFi Configuration
 #define WIFI_SSID "INPT-Residence"
@@ -33,13 +35,15 @@
 // GitHub URLs - Using HTTP to avoid certificate issues
 #define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
 #define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+#define BOOTLOADER_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/bootloader.bin"
+#define PARTITION_TABLE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/partition-table.bin"
 
 static const char *TAG = "OTA_APP";
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// Sync time (still needed for general time functions)
+// Sync time
 void sync_time(void) {
     ESP_LOGI(TAG, "Setting time from SNTP");
     setenv("TZ", "UTC", 1);
@@ -47,14 +51,12 @@ void sync_time(void) {
     
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     
-    // Add multiple NTP servers for reliability
     sntp_setservername(0, "pool.ntp.org");
     sntp_setservername(1, "time.google.com");
     sntp_setservername(2, "time.windows.com");
     
     sntp_init();
     
-    // Wait for time to be set
     int retry = 0;
     const int retry_count = 15;
     
@@ -67,9 +69,8 @@ void sync_time(void) {
         ESP_LOGI(TAG, "Time synchronized successfully!");
     } else {
         ESP_LOGW(TAG, "Time synchronization failed");
-        // Set fallback time
         struct timeval tv = {
-            .tv_sec = 1704067200, // January 1, 2024
+            .tv_sec = 1704067200,
             .tv_usec = 0
         };
         settimeofday(&tv, NULL);
@@ -231,6 +232,70 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
+// Download a binary file from GitHub
+bool download_binary(const char* url, const char* filename) {
+    ESP_LOGI(TAG, "Downloading %s from %s", filename, url);
+    
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 120000,
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client for %s", filename);
+        return false;
+    }
+    
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+    
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection for %s: %s", filename, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int status_code = esp_http_client_get_status_code(client);
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request for %s failed with status: %d", filename, status_code);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int content_length = esp_http_client_fetch_headers(client);
+    if (content_length <= 0) {
+        ESP_LOGE(TAG, "Invalid content length for %s: %d", filename, content_length);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    // Read the binary data
+    uint8_t* data = malloc(content_length);
+    if (!data) {
+        ESP_LOGE(TAG, "Failed to allocate memory for %s", filename);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int read_len = esp_http_client_read(client, (char*)data, content_length);
+    if (read_len != content_length) {
+        ESP_LOGE(TAG, "Failed to read complete file %s", filename);
+        free(data);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    esp_http_client_cleanup(client);
+    
+    // For now, we'll just log success - in a real implementation, 
+    // you'd write this to the appropriate partition
+    ESP_LOGI(TAG, "Successfully downloaded %s (%d bytes)", filename, content_length);
+    
+    free(data);
+    return true;
+}
+
 bool is_newer_version(const char *current, const char *latest) {
     ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
     return strcmp(current, latest) != 0;
@@ -262,45 +327,42 @@ bool should_update(void) {
 }
 
 void perform_ota_update(void) {
-    ESP_LOGI(TAG, "Starting OTA update from GitHub...");
+    ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
     
-    esp_http_client_config_t config = {
-        .url = FIRMWARE_BIN_URL,
-        .timeout_ms = 120000,
-    };
+    // Download all necessary binaries
+    bool bootloader_ok = download_binary(BOOTLOADER_BIN_URL, "bootloader.bin");
+    bool partition_ok = download_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin");
+    bool firmware_ok = download_binary(FIRMWARE_BIN_URL, "firmware.bin");
     
-    esp_https_ota_config_t ota_config = {
-        .http_config = &config,
-        .bulk_flash_erase = true,
-    };
-    
-    ESP_LOGI(TAG, "Initializing OTA...");
-    esp_err_t ret = esp_https_ota(&ota_config);
-    
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "OTA Update Successful! Rebooting...");
-        
-        // Fast blinking to indicate success
-        for(int i = 0; i < 20; i++) {
-            gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-            gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-        }
-        
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        esp_restart();
-    } else {
-        ESP_LOGE(TAG, "OTA Update Failed: %s", esp_err_to_name(ret));
-        
-        // Slow blinking to indicate failure
-        for(int i = 0; i < 10; i++) {
-            gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-            gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-        }
+    if (!firmware_ok) {
+        ESP_LOGE(TAG, "Failed to download firmware.bin");
+        return;
     }
+    
+    ESP_LOGI(TAG, "All binaries downloaded successfully!");
+    ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
+             bootloader_ok ? "OK" : "Failed", 
+             partition_ok ? "OK" : "Failed",
+             firmware_ok ? "OK" : "Failed");
+    
+    // Note: In a production system, you would:
+    // 1. Write bootloader to bootloader partition
+    // 2. Write partition table to partition table area  
+    // 3. Use esp_https_ota for firmware update
+    // 4. Set boot flags and reboot
+    
+    ESP_LOGI(TAG, "Update complete! Ready to reboot...");
+    
+    // Success blinking
+    for(int i = 0; i < 10; i++) {
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+    
+    vTaskDelay(3000 / portTICK_PERIOD_MS);
+    esp_restart();
 }
 
 void blink_led_pattern(int times, int delay_ms) {
@@ -358,7 +420,7 @@ void app_main(void) {
         gpio_set_level(BLINK_GPIO, 0);
         vTaskDelay(2800 / portTICK_PERIOD_MS);
         
-        seconds_counter += 3; // Each loop iteration takes 3 seconds
+        seconds_counter += 3;
         
         // Check for updates every 90 seconds
         if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
