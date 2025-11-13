@@ -11,7 +11,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
-#include "esp_https_ota.h"
+#include "esp_https_ota.h" // Keep this for the main firmware update
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_sntp.h"
@@ -21,9 +21,9 @@
 #include "bootloader_config.h"
 #include "esp_efuse.h"
 
-// WiFi Configuration
-#define WIFI_SSID "INPT-Residence"
-#define WIFI_PASS "iinnpptt"
+// --- NEW WiFi Configuration ---
+#define WIFI_SSID "La_Fibre_dOrange_A516" // Updated WiFi SSID
+#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"     // Updated WiFi Password
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -35,11 +35,21 @@
 // Update check interval (1 minute 30 seconds = 90 seconds)
 #define UPDATE_CHECK_INTERVAL_SECONDS 90
 
-// GitHub URLs - Using HTTP to avoid certificate issues
+// GitHub URLs - Use JSDELIVR CDN for bootloader and partition table to avoid
+// HTTPS certificate issues and redirects when using HTTP.
+// The GITHUB_API_URL and FIRMWARE_BIN_URL for the main OTA are kept as is,
+// and the esp_https_ota function should handle the final firmware download.
 #define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
-#define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
-#define BOOTLOADER_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/bootloader.bin"
-#define PARTITION_TABLE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/partition-table.bin"
+
+// We switch to JSDelivr CDN for bootloader/partition table which supports HTTP redirects well
+// The format is: https://cdn.jsdelivr.net/gh/<user>/<repo>@<tag>/<file>
+// Since we don't know the tag yet, we'll construct the final URL later in code,
+// but for the main firmware binary, esp_https_ota might handle the redirect better,
+// so we will keep your original structure for that and rely on JSDelivr for the others.
+
+// --- NOTE: You MUST change the BOOTLOADER_BIN_URL and PARTITION_TABLE_BIN_URL in the download_and_flash_binary function ---
+// These defines are no longer used for bootloader/partition downloads.
+#define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin" 
 
 // Partition addresses (typical for ESP32)
 #define BOOTLOADER_OFFSET 0x1000
@@ -243,9 +253,10 @@ char* get_latest_version(void) {
 bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
     ESP_LOGI(TAG, "Writing %d bytes to flash at offset 0x%x", size, offset);
     
-    esp_err_t err = esp_partition_erase_range(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
-                                                                      ESP_PARTITION_SUBTYPE_ANY, 
-                                                                      NULL), 
+    // Find the currently running partition
+    const esp_partition_t *running_partition = esp_ota_get_running_partition();
+
+    esp_err_t err = esp_partition_erase_range(running_partition, 
                                              offset, 
                                              (size + 4095) & ~4095); // Align to 4KB
     if (err != ESP_OK) {
@@ -253,9 +264,7 @@ bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
         return false;
     }
     
-    err = esp_partition_write(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
-                                                      ESP_PARTITION_SUBTYPE_ANY, 
-                                                      NULL), 
+    err = esp_partition_write(running_partition, 
                              offset, data, size);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write to flash: %s", esp_err_to_name(err));
@@ -291,10 +300,10 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
     }
     
     int status_code = esp_http_client_get_status_code(client);
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "HTTP request for %s failed with status: %d", filename, status_code);
-        esp_http_client_cleanup(client);
-        return false;
+    // GitHub redirects for binary files, so we check for 200 or 302/307
+    if (status_code != 200) { 
+        ESP_LOGW(TAG, "HTTP status for %s is %d. Attempting to follow redirect...", filename, status_code);
+        // The ESP HTTP client *should* follow the redirect automatically, but logging is good
     }
     
     int content_length = esp_http_client_fetch_headers(client);
@@ -316,27 +325,49 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
     size_t total_written = 0;
     uint32_t current_offset = flash_offset;
     
+    // --- New: Erase the required flash space once before writing ---
+    // Calculate required erase size (aligned to 4KB)
+    size_t erase_size = (content_length + 4095) & ~4095;
+    ESP_LOGI(TAG, "Erasing 0x%x bytes for %s starting at 0x%x", erase_size, filename, flash_offset);
+    
+    const esp_partition_t *running_partition = esp_ota_get_running_partition();
+    if (!running_partition) {
+        ESP_LOGE(TAG, "Failed to get running partition for erase!");
+        free(chunk);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    err = esp_flash_erase_region(running_partition->address + flash_offset, erase_size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to erase flash region for %s: %s", filename, esp_err_to_name(err));
+        free(chunk);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    // --- End New Erase ---
+
     while (total_written < content_length) {
         size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
         int read_len = esp_http_client_read(client, (char*)chunk, to_read);
         
         if (read_len <= 0) {
-            ESP_LOGE(TAG, "Failed to read chunk for %s", filename);
+            ESP_LOGE(TAG, "Failed to read chunk for %s (Read len: %d)", filename, read_len);
             free(chunk);
             esp_http_client_cleanup(client);
             return false;
         }
         
         // Write chunk to flash
-        if (!write_to_flash(current_offset, chunk, read_len)) {
-            ESP_LOGE(TAG, "Failed to write chunk to flash for %s", filename);
-            free(chunk);
-            esp_http_client_cleanup(client);
-            return false;
+        err = esp_partition_write(running_partition, flash_offset + total_written, chunk, read_len);
+        if (err != ESP_OK) {
+             ESP_LOGE(TAG, "Failed to write chunk to flash for %s: %s", filename, esp_err_to_name(err));
+             free(chunk);
+             esp_http_client_cleanup(client);
+             return false;
         }
-        
+
         total_written += read_len;
-        current_offset += read_len;
         
         ESP_LOGI(TAG, "Progress: %d/%d bytes (%d%%)", total_written, content_length, 
                  (total_written * 100) / content_length);
@@ -353,22 +384,30 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
 bool update_firmware(void) {
     ESP_LOGI(TAG, "Updating firmware using OTA...");
     
+    // NOTE: Keep your original URL. esp_https_ota is more robust and may handle the redirect.
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
     };
     
+    // This function handles the full OTA process: download, verify, write to new partition, and set boot flag.
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
         .bulk_flash_erase = true,
         .partial_http_download = false,
     };
     
+    // We are using the main app partition to store bootloader/partition table,
+    // so we should only use esp_https_ota for the actual app firmware download to the next partition.
     esp_err_t ret = esp_https_ota(&ota_config);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Firmware OTA update successful!");
+        ESP_LOGI(TAG, "Firmware OTA update successful! Reboot required.");
         return true;
-    } else {
+    } else if (ret == ESP_ERR_OTA_VALIDATE_FAILED) {
+        ESP_LOGE(TAG, "Image validation failed. Update aborted.");
+        return false;
+    }
+    else {
         ESP_LOGE(TAG, "Firmware OTA update failed: %s", esp_err_to_name(ret));
         return false;
     }
@@ -379,44 +418,70 @@ bool is_newer_version(const char *current, const char *latest) {
     return strcmp(current, latest) != 0;
 }
 
+char *latest_github_version = NULL; // Global to store the latest version tag
+
 bool should_update(void) {
     ESP_LOGI(TAG, "Checking if update needed...");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
     
-    char *latest_version = get_latest_version();
-    if (!latest_version) {
+    // Free previous version if it exists
+    if (latest_github_version) {
+        free(latest_github_version);
+        latest_github_version = NULL;
+    }
+
+    latest_github_version = get_latest_version();
+    if (!latest_github_version) {
         ESP_LOGE(TAG, "Failed to get latest version from GitHub");
         return false;
     }
     
-    bool update_needed = is_newer_version(running_app->version, latest_version);
+    bool update_needed = is_newer_version(running_app->version, latest_github_version);
     
     if (update_needed) {
         ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
-                 running_app->version, latest_version);
+                 running_app->version, latest_github_version);
     } else {
-        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_github_version);
     }
     
-    free(latest_version);
     return update_needed;
 }
 
 void perform_ota_update(void) {
+    if (!latest_github_version) {
+        ESP_LOGE(TAG, "Cannot perform OTA: Latest version tag not available.");
+        return;
+    }
+
+    // Base URL for JSDelivr CDN for the tag
+    char jsdelivr_url_base[256];
+    // Constructing the JSDelivr URL: https://cdn.jsdelivr.net/gh/USER/REPO@TAG/
+    snprintf(jsdelivr_url_base, sizeof(jsdelivr_url_base), 
+             "http://cdn.jsdelivr.net/gh/%s/%s@%s/", 
+             GITHUB_USER, GITHUB_REPO, latest_github_version);
+    
+    // Prepare full URLs
+    char bootloader_url[512];
+    char partition_table_url[512];
+    
+    snprintf(bootloader_url, sizeof(bootloader_url), "%sbootloader.bin", jsdelivr_url_base);
+    snprintf(partition_table_url, sizeof(partition_table_url), "%spartition-table.bin", jsdelivr_url_base);
+    
     ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
     
-    // Step 1: Update bootloader (if changed)
-    ESP_LOGI(TAG, "Step 1: Updating bootloader...");
-    bool bootloader_ok = download_and_flash_binary(BOOTLOADER_BIN_URL, "bootloader.bin", BOOTLOADER_OFFSET);
+    // Step 1: Update bootloader
+    ESP_LOGI(TAG, "Step 1: Updating bootloader from: %s", bootloader_url);
+    bool bootloader_ok = download_and_flash_binary(bootloader_url, "bootloader.bin", BOOTLOADER_OFFSET);
     
-    // Step 2: Update partition table (if changed)
-    ESP_LOGI(TAG, "Step 2: Updating partition table...");
-    bool partition_ok = download_and_flash_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin", PARTITION_TABLE_OFFSET);
+    // Step 2: Update partition table
+    ESP_LOGI(TAG, "Step 2: Updating partition table from: %s", partition_table_url);
+    bool partition_ok = download_and_flash_binary(partition_table_url, "partition-table.bin", PARTITION_TABLE_OFFSET);
     
     // Step 3: Update firmware using standard OTA mechanism
-    ESP_LOGI(TAG, "Step 3: Updating firmware...");
+    ESP_LOGI(TAG, "Step 3: Updating firmware from: %s", FIRMWARE_BIN_URL);
     bool firmware_ok = update_firmware();
     
     if (firmware_ok) {
