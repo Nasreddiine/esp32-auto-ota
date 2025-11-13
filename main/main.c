@@ -11,14 +11,14 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
-#include "esp_https_ota.h" // Keep this for the main firmware update
+#include "esp_https_ota.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_sntp.h"
 #include "esp_partition.h"
 #include "esp_image_format.h"
 #include "esp_flash_partitions.h"
-#include "bootloader_config.h"
+// #include "bootloader_config.h" // Removed: This internal header caused the compilation error
 #include "esp_efuse.h"
 
 // --- NEW WiFi Configuration ---
@@ -37,18 +37,7 @@
 
 // GitHub URLs - Use JSDELIVR CDN for bootloader and partition table to avoid
 // HTTPS certificate issues and redirects when using HTTP.
-// The GITHUB_API_URL and FIRMWARE_BIN_URL for the main OTA are kept as is,
-// and the esp_https_ota function should handle the final firmware download.
 #define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
-
-// We switch to JSDelivr CDN for bootloader/partition table which supports HTTP redirects well
-// The format is: https://cdn.jsdelivr.net/gh/<user>/<repo>@<tag>/<file>
-// Since we don't know the tag yet, we'll construct the final URL later in code,
-// but for the main firmware binary, esp_https_ota might handle the redirect better,
-// so we will keep your original structure for that and rely on JSDelivr for the others.
-
-// --- NOTE: You MUST change the BOOTLOADER_BIN_URL and PARTITION_TABLE_BIN_URL in the download_and_flash_binary function ---
-// These defines are no longer used for bootloader/partition downloads.
 #define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin" 
 
 // Partition addresses (typical for ESP32)
@@ -249,32 +238,6 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
-// Write data to flash at specific offset
-bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
-    ESP_LOGI(TAG, "Writing %d bytes to flash at offset 0x%x", size, offset);
-    
-    // Find the currently running partition
-    const esp_partition_t *running_partition = esp_ota_get_running_partition();
-
-    esp_err_t err = esp_partition_erase_range(running_partition, 
-                                             offset, 
-                                             (size + 4095) & ~4095); // Align to 4KB
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase flash: %s", esp_err_to_name(err));
-        return false;
-    }
-    
-    err = esp_partition_write(running_partition, 
-                             offset, data, size);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write to flash: %s", esp_err_to_name(err));
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "Successfully wrote to flash");
-    return true;
-}
-
 // Download and flash a binary file
 bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
     ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%x", filename, url, flash_offset);
@@ -323,24 +286,25 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
     }
     
     size_t total_written = 0;
-    uint32_t current_offset = flash_offset;
     
     // --- New: Erase the required flash space once before writing ---
     // Calculate required erase size (aligned to 4KB)
     size_t erase_size = (content_length + 4095) & ~4095;
     ESP_LOGI(TAG, "Erasing 0x%x bytes for %s starting at 0x%x", erase_size, filename, flash_offset);
     
-    const esp_partition_t *running_partition = esp_ota_get_running_partition();
-    if (!running_partition) {
-        ESP_LOGE(TAG, "Failed to get running partition for erase!");
+    // Use esp_flash_erase_region for low-level erase
+    err = esp_flash_erase_region(flash_offset, erase_size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to erase flash region for %s: %s", filename, esp_err_to_name(err));
         free(chunk);
         esp_http_client_cleanup(client);
         return false;
     }
-
-    err = esp_flash_erase_region(running_partition->address + flash_offset, erase_size);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase flash region for %s: %s", filename, esp_err_to_name(err));
+    
+    // Find the currently running partition (Used for write function, though writing to fixed address is direct)
+    const esp_partition_t *running_partition = esp_ota_get_running_partition();
+    if (!running_partition) {
+        ESP_LOGE(TAG, "Failed to get running partition for write!");
         free(chunk);
         esp_http_client_cleanup(client);
         return false;
@@ -358,7 +322,7 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
             return false;
         }
         
-        // Write chunk to flash
+        // Write chunk to flash at the absolute offset
         err = esp_partition_write(running_partition, flash_offset + total_written, chunk, read_len);
         if (err != ESP_OK) {
              ESP_LOGE(TAG, "Failed to write chunk to flash for %s: %s", filename, esp_err_to_name(err));
@@ -458,7 +422,7 @@ void perform_ota_update(void) {
 
     // Base URL for JSDelivr CDN for the tag
     char jsdelivr_url_base[256];
-    // Constructing the JSDelivr URL: https://cdn.jsdelivr.net/gh/USER/REPO@TAG/
+    // Constructing the JSDelivr URL: http://cdn.jsdelivr.net/gh/USER/REPO@TAG/
     snprintf(jsdelivr_url_base, sizeof(jsdelivr_url_base), 
              "http://cdn.jsdelivr.net/gh/%s/%s@%s/", 
              GITHUB_USER, GITHUB_REPO, latest_github_version);
@@ -467,6 +431,7 @@ void perform_ota_update(void) {
     char bootloader_url[512];
     char partition_table_url[512];
     
+    // IMPORTANT: bootloader.bin and partition-table.bin must be placed in the root of your GitHub release tag!
     snprintf(bootloader_url, sizeof(bootloader_url), "%sbootloader.bin", jsdelivr_url_base);
     snprintf(partition_table_url, sizeof(partition_table_url), "%spartition-table.bin", jsdelivr_url_base);
     
