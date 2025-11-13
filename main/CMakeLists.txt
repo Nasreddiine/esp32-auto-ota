@@ -12,8 +12,7 @@ idf_component_register(
         driver
         app_update
         esp_partition
-        bootloader_support
-        efuse
+        esp-tls
 )
 
 set(COMPONENT_VER "1.0.0")
