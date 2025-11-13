@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h> // Includes PRIx32 for correct logging
+#include <inttypes.h>
 #include <time.h>
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
@@ -12,18 +12,14 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_crt_bundle.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_sntp.h"
-#include "esp_partition.h"
-#include "esp_image_format.h"
-#include "esp_flash_partitions.h"
-#include "esp_efuse.h"
-#include "esp_flash.h" // ADDED: Required for esp_flash_erase_region
 
-// --- NEW WiFi Configuration (as previously fixed) ---
-#define WIFI_SSID "La_Fibre_dOrange_A516" 
-#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"     
+// WiFi Configuration
+#define WIFI_SSID "La_Fibre_dOrange_A516"
+#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -35,14 +31,9 @@
 // Update check interval (1 minute 30 seconds = 90 seconds)
 #define UPDATE_CHECK_INTERVAL_SECONDS 90
 
-// GitHub URLs - Use JSDELIVR CDN for bootloader and partition table to avoid
-// HTTPS certificate issues and redirects when using HTTP.
-#define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
-#define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin" 
-
-// Partition addresses (typical for ESP32)
-#define BOOTLOADER_OFFSET 0x1000
-#define PARTITION_TABLE_OFFSET 0x8000
+// GitHub URLs - Using HTTPS with certificate bundle
+#define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
+#define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
 
 static const char *TAG = "OTA_APP";
 
@@ -55,13 +46,10 @@ void sync_time(void) {
     setenv("TZ", "UTC", 1);
     tzset();
     
-    // FIX: Replaced deprecated sntp_* functions with esp_sntp_*
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    
     esp_sntp_setservername(0, "pool.ntp.org");
     esp_sntp_setservername(1, "time.google.com");
     esp_sntp_setservername(2, "time.windows.com");
-    
     esp_sntp_init();
     
     int retry = 0;
@@ -164,13 +152,14 @@ char* extract_version_from_json(const char* json_response) {
     return version;
 }
 
-// Get latest version from GitHub API using HTTP
+// Get latest version from GitHub API using HTTPS with cert bundle
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
         .timeout_ms = 20000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -239,118 +228,15 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
-// NOTE: The separate write_to_flash function has been removed. 
-// Its logic was incompatible with absolute flash offsets (0x1000/0x8000). 
-// The following function is the corrected, low-level implementation.
-
-// Download and flash a binary file
-bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
-    // FIX: Changed %x to %" PRIx32 " for correct uint32_t logging
-    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%" PRIx32, filename, url, flash_offset); 
-    
-    esp_http_client_config_t config = {
-        .url = url,
-        .timeout_ms = 120000,
-    };
-    
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(TAG, "Failed to initialize HTTP client for %s", filename);
-        return false;
-    }
-    
-    esp_http_client_set_method(client, HTTP_METHOD_GET);
-    
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection for %s: %s", filename, esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    
-    int status_code = esp_http_client_get_status_code(client);
-    // GitHub download URLs typically redirect, which the client should handle.
-    if (status_code != 200) {
-        ESP_LOGW(TAG, "HTTP status for %s is %d. Assuming redirect was handled.", filename, status_code);
-    }
-    
-    int content_length = esp_http_client_fetch_headers(client);
-    if (content_length <= 0) {
-        ESP_LOGE(TAG, "Invalid content length for %s: %d", filename, content_length);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    
-    // Read and flash in chunks to handle large files
-    const size_t chunk_size = 4096;
-    uint8_t* chunk = malloc(chunk_size);
-    if (!chunk) {
-        ESP_LOGE(TAG, "Failed to allocate memory for %s", filename);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    
-    size_t total_written = 0;
-    
-    // --- Correct Flash Erase and Write Logic ---
-    // Calculate required erase size (aligned to 4KB)
-    size_t erase_size = (content_length + 4095) & ~4095;
-    // FIX: Changed %x to %" PRIx32 " for correct uint32_t logging
-    ESP_LOGI(TAG, "Erasing 0x%" PRIx32 " bytes for %s starting at 0x%" PRIx32, (uint32_t)erase_size, filename, flash_offset);
-    
-    // Use esp_flash_erase_region for low-level erase (Requires esp_flash.h)
-    err = esp_flash_erase_region(flash_offset, erase_size);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase flash region for %s: %s", filename, esp_err_to_name(err));
-        free(chunk);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    
-    // We are writing to fixed addresses (bootloader/partition), so we don't use
-    // the running partition logic needed for standard OTA. We use the low-level
-    // esp_flash_write to the absolute address.
-    
-    while (total_written < content_length) {
-        size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
-        int read_len = esp_http_client_read(client, (char*)chunk, to_read);
-        
-        if (read_len <= 0) {
-            ESP_LOGE(TAG, "Failed to read chunk for %s (Read len: %d)", filename, read_len);
-            free(chunk);
-            esp_http_client_cleanup(client);
-            return false;
-        }
-        
-        // Write chunk to flash at the absolute offset
-        err = esp_flash_write(NULL, chunk, flash_offset + total_written, read_len);
-        if (err != ESP_OK) {
-             ESP_LOGE(TAG, "Failed to write chunk to flash for %s: %s", filename, esp_err_to_name(err));
-             free(chunk);
-             esp_http_client_cleanup(client);
-             return false;
-        }
-
-        total_written += read_len;
-        
-        ESP_LOGI(TAG, "Progress: %" PRIu32 "/%" PRIu32 " bytes (%" PRIu32 "%%)", (uint32_t)total_written, (uint32_t)content_length, 
-                 ((uint32_t)total_written * 100) / (uint32_t)content_length);
-    }
-    
-    free(chunk);
-    esp_http_client_cleanup(client);
-    
-    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%" PRIu32 " bytes)", filename, (uint32_t)content_length);
-    return true;
-}
-
-// Update firmware using standard OTA mechanism
+// Update firmware using standard OTA mechanism with HTTPS
 bool update_firmware(void) {
     ESP_LOGI(TAG, "Updating firmware using OTA...");
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .keep_alive_enable = true,
     };
     
     esp_https_ota_config_t ota_config = {
@@ -374,80 +260,38 @@ bool is_newer_version(const char *current, const char *latest) {
     return strcmp(current, latest) != 0;
 }
 
-char *latest_github_version = NULL; // Global to store the latest version tag
-
 bool should_update(void) {
     ESP_LOGI(TAG, "Checking if update needed...");
     
-    // FIX: Replaced deprecated esp_ota_get_app_description with esp_app_get_description
-    const esp_app_desc_t *running_app = esp_app_get_description(); 
+    const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
-
-    // Free previous version if it exists
-    if (latest_github_version) {
-        free(latest_github_version);
-        latest_github_version = NULL;
-    }
     
-    latest_github_version = get_latest_version();
-    if (!latest_github_version) {
+    char *latest_version = get_latest_version();
+    if (!latest_version) {
         ESP_LOGE(TAG, "Failed to get latest version from GitHub");
         return false;
     }
     
-    bool update_needed = is_newer_version(running_app->version, latest_github_version);
+    bool update_needed = is_newer_version(running_app->version, latest_version);
     
     if (update_needed) {
         ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
-                 running_app->version, latest_github_version);
+                 running_app->version, latest_version);
     } else {
-        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_github_version);
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
     }
     
+    free(latest_version);
     return update_needed;
 }
 
 void perform_ota_update(void) {
-    if (!latest_github_version) {
-        ESP_LOGE(TAG, "Cannot perform OTA: Latest version tag not available.");
-        return;
-    }
-
-    // Base URL for JSDelivr CDN for the tag (This is the fixed logic)
-    char jsdelivr_url_base[256];
-    // Constructing the JSDelivr URL: http://cdn.jsdelivr.net/gh/USER/REPO@TAG/
-    snprintf(jsdelivr_url_base, sizeof(jsdelivr_url_base), 
-             "http://cdn.jsdelivr.net/gh/%s/%s@%s/", 
-             GITHUB_USER, GITHUB_REPO, latest_github_version);
+    ESP_LOGI(TAG, "Starting OTA firmware update from GitHub...");
     
-    // Prepare full URLs
-    char bootloader_url[512];
-    char partition_table_url[512];
-    
-    // IMPORTANT: bootloader.bin and partition-table.bin must be placed in the root of your GitHub release tag!
-    snprintf(bootloader_url, sizeof(bootloader_url), "%sbootloader.bin", jsdelivr_url_base);
-    snprintf(partition_table_url, sizeof(partition_table_url), "%spartition-table.bin", jsdelivr_url_base);
-    
-    ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
-    
-    // Step 1: Update bootloader
-    ESP_LOGI(TAG, "Step 1: Updating bootloader from: %s", bootloader_url);
-    bool bootloader_ok = download_and_flash_binary(bootloader_url, "bootloader.bin", BOOTLOADER_OFFSET);
-    
-    // Step 2: Update partition table
-    ESP_LOGI(TAG, "Step 2: Updating partition table from: %s", partition_table_url);
-    bool partition_ok = download_and_flash_binary(partition_table_url, "partition-table.bin", PARTITION_TABLE_OFFSET);
-    
-    // Step 3: Update firmware using standard OTA mechanism
-    ESP_LOGI(TAG, "Step 3: Updating firmware from: %s", FIRMWARE_BIN_URL);
     bool firmware_ok = update_firmware();
     
     if (firmware_ok) {
-        ESP_LOGI(TAG, "All updates completed successfully!");
-        ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
-                 bootloader_ok ? "OK" : "Failed", 
-                 partition_ok ? "OK" : "Failed",
-                 firmware_ok ? "OK" : "OK");
+        ESP_LOGI(TAG, "Firmware update completed successfully!");
         
         // Success blinking
         for(int i = 0; i < 20; i++) {
@@ -486,8 +330,7 @@ void blink_led_pattern(int times, int delay_ms) {
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
     
-    // FIX: Replaced deprecated esp_ota_get_app_description with esp_app_get_description
-    const esp_app_desc_t *running_app = esp_app_get_description(); 
+    const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
     ESP_LOGI(TAG, "Update check interval: %d seconds", UPDATE_CHECK_INTERVAL_SECONDS);
     
@@ -509,7 +352,7 @@ void app_main(void) {
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi connected!");
     
-    // Sync time
+    // Sync time (important for HTTPS certificate validation)
     sync_time();
     
     // Initial update check
