@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include <inttypes.h>
+#include <inttypes.h> // Includes PRIx32 for correct logging
 #include <time.h>
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
@@ -18,12 +18,12 @@
 #include "esp_partition.h"
 #include "esp_image_format.h"
 #include "esp_flash_partitions.h"
-// #include "bootloader_config.h" // Removed: This internal header caused the compilation error
 #include "esp_efuse.h"
+#include "esp_flash.h" // ADDED: Required for esp_flash_erase_region
 
-// --- NEW WiFi Configuration ---
-#define WIFI_SSID "La_Fibre_dOrange_A516" // Updated WiFi SSID
-#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"     // Updated WiFi Password
+// --- NEW WiFi Configuration (as previously fixed) ---
+#define WIFI_SSID "La_Fibre_dOrange_A516" 
+#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"     
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -55,23 +55,24 @@ void sync_time(void) {
     setenv("TZ", "UTC", 1);
     tzset();
     
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    // FIX: Replaced deprecated sntp_* functions with esp_sntp_*
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_setservername(1, "time.google.com");
-    sntp_setservername(2, "time.windows.com");
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_setservername(1, "time.google.com");
+    esp_sntp_setservername(2, "time.windows.com");
     
-    sntp_init();
+    esp_sntp_init();
     
     int retry = 0;
     const int retry_count = 15;
     
-    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
+    while (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
         vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
     
-    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+    if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
         ESP_LOGI(TAG, "Time synchronized successfully!");
     } else {
         ESP_LOGW(TAG, "Time synchronization failed");
@@ -238,9 +239,14 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
+// NOTE: The separate write_to_flash function has been removed. 
+// Its logic was incompatible with absolute flash offsets (0x1000/0x8000). 
+// The following function is the corrected, low-level implementation.
+
 // Download and flash a binary file
 bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
-    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%x", filename, url, flash_offset);
+    // FIX: Changed %x to %" PRIx32 " for correct uint32_t logging
+    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%" PRIx32, filename, url, flash_offset); 
     
     esp_http_client_config_t config = {
         .url = url,
@@ -263,10 +269,9 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
     }
     
     int status_code = esp_http_client_get_status_code(client);
-    // GitHub redirects for binary files, so we check for 200 or 302/307
-    if (status_code != 200) { 
-        ESP_LOGW(TAG, "HTTP status for %s is %d. Attempting to follow redirect...", filename, status_code);
-        // The ESP HTTP client *should* follow the redirect automatically, but logging is good
+    // GitHub download URLs typically redirect, which the client should handle.
+    if (status_code != 200) {
+        ESP_LOGW(TAG, "HTTP status for %s is %d. Assuming redirect was handled.", filename, status_code);
     }
     
     int content_length = esp_http_client_fetch_headers(client);
@@ -287,12 +292,13 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
     
     size_t total_written = 0;
     
-    // --- New: Erase the required flash space once before writing ---
+    // --- Correct Flash Erase and Write Logic ---
     // Calculate required erase size (aligned to 4KB)
     size_t erase_size = (content_length + 4095) & ~4095;
-    ESP_LOGI(TAG, "Erasing 0x%x bytes for %s starting at 0x%x", erase_size, filename, flash_offset);
+    // FIX: Changed %x to %" PRIx32 " for correct uint32_t logging
+    ESP_LOGI(TAG, "Erasing 0x%" PRIx32 " bytes for %s starting at 0x%" PRIx32, (uint32_t)erase_size, filename, flash_offset);
     
-    // Use esp_flash_erase_region for low-level erase
+    // Use esp_flash_erase_region for low-level erase (Requires esp_flash.h)
     err = esp_flash_erase_region(flash_offset, erase_size);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to erase flash region for %s: %s", filename, esp_err_to_name(err));
@@ -301,16 +307,10 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
         return false;
     }
     
-    // Find the currently running partition (Used for write function, though writing to fixed address is direct)
-    const esp_partition_t *running_partition = esp_ota_get_running_partition();
-    if (!running_partition) {
-        ESP_LOGE(TAG, "Failed to get running partition for write!");
-        free(chunk);
-        esp_http_client_cleanup(client);
-        return false;
-    }
-    // --- End New Erase ---
-
+    // We are writing to fixed addresses (bootloader/partition), so we don't use
+    // the running partition logic needed for standard OTA. We use the low-level
+    // esp_flash_write to the absolute address.
+    
     while (total_written < content_length) {
         size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
         int read_len = esp_http_client_read(client, (char*)chunk, to_read);
@@ -323,7 +323,7 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
         }
         
         // Write chunk to flash at the absolute offset
-        err = esp_partition_write(running_partition, flash_offset + total_written, chunk, read_len);
+        err = esp_flash_write(NULL, chunk, flash_offset + total_written, read_len);
         if (err != ESP_OK) {
              ESP_LOGE(TAG, "Failed to write chunk to flash for %s: %s", filename, esp_err_to_name(err));
              free(chunk);
@@ -333,14 +333,14 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
 
         total_written += read_len;
         
-        ESP_LOGI(TAG, "Progress: %d/%d bytes (%d%%)", total_written, content_length, 
-                 (total_written * 100) / content_length);
+        ESP_LOGI(TAG, "Progress: %" PRIu32 "/%" PRIu32 " bytes (%" PRIu32 "%%)", (uint32_t)total_written, (uint32_t)content_length, 
+                 ((uint32_t)total_written * 100) / (uint32_t)content_length);
     }
     
     free(chunk);
     esp_http_client_cleanup(client);
     
-    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%d bytes)", filename, content_length);
+    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%" PRIu32 " bytes)", filename, (uint32_t)content_length);
     return true;
 }
 
@@ -348,30 +348,22 @@ bool download_and_flash_binary(const char* url, const char* filename, uint32_t f
 bool update_firmware(void) {
     ESP_LOGI(TAG, "Updating firmware using OTA...");
     
-    // NOTE: Keep your original URL. esp_https_ota is more robust and may handle the redirect.
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
     };
     
-    // This function handles the full OTA process: download, verify, write to new partition, and set boot flag.
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
         .bulk_flash_erase = true,
         .partial_http_download = false,
     };
     
-    // We are using the main app partition to store bootloader/partition table,
-    // so we should only use esp_https_ota for the actual app firmware download to the next partition.
     esp_err_t ret = esp_https_ota(&ota_config);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Firmware OTA update successful! Reboot required.");
+        ESP_LOGI(TAG, "Firmware OTA update successful!");
         return true;
-    } else if (ret == ESP_ERR_OTA_VALIDATE_FAILED) {
-        ESP_LOGE(TAG, "Image validation failed. Update aborted.");
-        return false;
-    }
-    else {
+    } else {
         ESP_LOGE(TAG, "Firmware OTA update failed: %s", esp_err_to_name(ret));
         return false;
     }
@@ -387,15 +379,16 @@ char *latest_github_version = NULL; // Global to store the latest version tag
 bool should_update(void) {
     ESP_LOGI(TAG, "Checking if update needed...");
     
-    const esp_app_desc_t *running_app = esp_ota_get_app_description();
+    // FIX: Replaced deprecated esp_ota_get_app_description with esp_app_get_description
+    const esp_app_desc_t *running_app = esp_app_get_description(); 
     ESP_LOGI(TAG, "Currently running: %s", running_app->version);
-    
+
     // Free previous version if it exists
     if (latest_github_version) {
         free(latest_github_version);
         latest_github_version = NULL;
     }
-
+    
     latest_github_version = get_latest_version();
     if (!latest_github_version) {
         ESP_LOGE(TAG, "Failed to get latest version from GitHub");
@@ -420,7 +413,7 @@ void perform_ota_update(void) {
         return;
     }
 
-    // Base URL for JSDelivr CDN for the tag
+    // Base URL for JSDelivr CDN for the tag (This is the fixed logic)
     char jsdelivr_url_base[256];
     // Constructing the JSDelivr URL: http://cdn.jsdelivr.net/gh/USER/REPO@TAG/
     snprintf(jsdelivr_url_base, sizeof(jsdelivr_url_base), 
@@ -493,7 +486,8 @@ void blink_led_pattern(int times, int delay_ms) {
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
     
-    const esp_app_desc_t *running_app = esp_ota_get_app_description();
+    // FIX: Replaced deprecated esp_ota_get_app_description with esp_app_get_description
+    const esp_app_desc_t *running_app = esp_app_get_description(); 
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
     ESP_LOGI(TAG, "Update check interval: %d seconds", UPDATE_CHECK_INTERVAL_SECONDS);
     
