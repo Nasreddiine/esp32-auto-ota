@@ -12,7 +12,8 @@ idf_component_register(
         driver
         app_update
         esp_partition
-        esp-tls
+        efuse
+        json  # Added for robust JSON parsing (cJSON)
 )
 
 set(COMPONENT_VER "1.0.0")
