@@ -428,9 +428,9 @@ void app_main(void) {
     int seconds_counter = 0;
     while (1) {
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2800 / portTICK_PERIOD_MS);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
         
         seconds_counter += 3;
         
@@ -450,3 +450,4 @@ void app_main(void) {
         }
     }
 }
+
