@@ -16,12 +16,14 @@
 #include "driver/gpio.h"
 #include "esp_sntp.h"
 #include "esp_partition.h"
-#include "esp_crt_bundle.h"  // For certificate bundle
-#include "cJSON.h"           // For JSON parsing
+#include "esp_image_format.h"
+#include "esp_flash_partitions.h"
+#include "bootloader_config.h"
+#include "esp_efuse.h"
 
-// WiFi Configuration (updated as per request)
-#define WIFI_SSID "La_Fibre_dOrange_A516"
-#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"
+// WiFi Configuration
+#define WIFI_SSID "INPT-Residence"
+#define WIFI_PASS "iinnpptt"
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -33,9 +35,15 @@
 // Update check interval (1 minute 30 seconds = 90 seconds)
 #define UPDATE_CHECK_INTERVAL_SECONDS 90
 
-// GitHub URLs - Using HTTPS with cert bundle
-#define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
-#define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+// GitHub URLs - Using HTTP to avoid certificate issues
+#define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
+#define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+#define BOOTLOADER_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/bootloader.bin"
+#define PARTITION_TABLE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/partition-table.bin"
+
+// Partition addresses (typical for ESP32)
+#define BOOTLOADER_OFFSET 0x1000
+#define PARTITION_TABLE_OFFSET 0x8000
 
 static const char *TAG = "OTA_APP";
 
@@ -69,7 +77,7 @@ void sync_time(void) {
     } else {
         ESP_LOGW(TAG, "Time synchronization failed");
         struct timeval tv = {
-            .tv_sec = 1704067200,  // 2024-01-01
+            .tv_sec = 1704067200,
             .tv_usec = 0
         };
         settimeofday(&tv, NULL);
@@ -125,123 +133,229 @@ void wifi_init(void) {
     ESP_LOGI(TAG, "WiFi started");
 }
 
-// Get latest version from GitHub API using HTTPS with retries
+// Simple string extraction for version from JSON
+char* extract_version_from_json(const char* json_response) {
+    const char* tag_key = "\"tag_name\":\"";
+    char* tag_start = strstr(json_response, tag_key);
+    
+    if (!tag_start) {
+        ESP_LOGE(TAG, "tag_name not found in JSON response");
+        return NULL;
+    }
+    
+    tag_start += strlen(tag_key);
+    char* tag_end = strchr(tag_start, '"');
+    
+    if (!tag_end) {
+        ESP_LOGE(TAG, "Invalid tag_name format in JSON");
+        return NULL;
+    }
+    
+    size_t version_len = tag_end - tag_start;
+    char* version = malloc(version_len + 1);
+    if (!version) {
+        ESP_LOGE(TAG, "Failed to allocate memory for version");
+        return NULL;
+    }
+    
+    strncpy(version, tag_start, version_len);
+    version[version_len] = '\0';
+    
+    return version;
+}
+
+// Get latest version from GitHub API using HTTP
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
         .timeout_ms = 20000,
-        .crt_bundle_attach = esp_crt_bundle_attach,  // Enable cert bundle
     };
     
-    char *latest_version = NULL;
-    int max_retries = 3;
-    for (int retry = 0; retry < max_retries; retry++) {
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        if (!client) continue;
-        
-        esp_http_client_set_method(client, HTTP_METHOD_GET);
-        esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
-        esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
-        
-        esp_err_t err = esp_http_client_perform(client);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "HTTP request failed (retry %d): %s", retry, esp_err_to_name(err));
-            esp_http_client_cleanup(client);
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        
-        int status_code = esp_http_client_get_status_code(client);
-        if (status_code != 200) {
-            ESP_LOGE(TAG, "HTTP status: %d (retry %d)", status_code, retry);
-            esp_http_client_cleanup(client);
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        
-        int content_length = esp_http_client_get_content_length(client);
-        if (content_length <= 0 || content_length > 8192) content_length = 8192;
-        
-        char *response = malloc(content_length + 1);
-        if (!response) {
-            esp_http_client_cleanup(client);
-            continue;
-        }
-        
-        int read_len = esp_http_client_read(client, response, content_length);
-        if (read_len <= 0) {
-            free(response);
-            esp_http_client_cleanup(client);
-            continue;
-        }
-        response[read_len] = '\0';
-        
-        // Parse with cJSON
-        cJSON *json = cJSON_Parse(response);
-        if (json) {
-            cJSON *tag_name = cJSON_GetObjectItem(json, "tag_name");
-            if (cJSON_IsString(tag_name) && tag_name->valuestring) {
-                latest_version = strdup(tag_name->valuestring);
-            }
-            cJSON_Delete(json);
-        }
-        
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        return NULL;
+    }
+    
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
+    esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+    
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int status_code = esp_http_client_get_status_code(client);
+    ESP_LOGI(TAG, "HTTP Status: %d", status_code);
+    
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request failed with status: %d", status_code);
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int content_length = esp_http_client_get_content_length(client);
+    if (content_length <= 0) {
+        content_length = 4096;
+    }
+    
+    if (content_length > 8192) {
+        content_length = 8192;
+    }
+    
+    char *response = malloc(content_length + 1);
+    if (!response) {
+        ESP_LOGE(TAG, "Failed to allocate memory for response");
+        esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    int read_len = esp_http_client_read(client, response, content_length);
+    if (read_len <= 0) {
+        ESP_LOGE(TAG, "Failed to read HTTP response");
         free(response);
         esp_http_client_cleanup(client);
+        return NULL;
+    }
+    
+    response[read_len] = '\0';
+    
+    esp_http_client_cleanup(client);
+    
+    char *latest_version = extract_version_from_json(response);
+    
+    if (latest_version) {
+        ESP_LOGI(TAG, "Latest version on GitHub: %s", latest_version);
+    } else {
+        ESP_LOGE(TAG, "Failed to extract version from response");
+    }
+    
+    free(response);
+    return latest_version;
+}
+
+// Write data to flash at specific offset
+bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
+    ESP_LOGI(TAG, "Writing %d bytes to flash at offset 0x%x", size, offset);
+    
+    esp_err_t err = esp_partition_erase_range(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                                      NULL), 
+                                             offset, 
+                                             (size + 4095) & ~4095); // Align to 4KB
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to erase flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    err = esp_partition_write(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                      NULL), 
+                             offset, data, size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write to flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Successfully wrote to flash");
+    return true;
+}
+
+// Download and flash a binary file
+bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
+    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%x", filename, url, flash_offset);
+    
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 120000,
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client for %s", filename);
+        return false;
+    }
+    
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+    
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection for %s: %s", filename, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int status_code = esp_http_client_get_status_code(client);
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request for %s failed with status: %d", filename, status_code);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int content_length = esp_http_client_fetch_headers(client);
+    if (content_length <= 0) {
+        ESP_LOGE(TAG, "Invalid content length for %s: %d", filename, content_length);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    // Read and flash in chunks to handle large files
+    const size_t chunk_size = 4096;
+    uint8_t* chunk = malloc(chunk_size);
+    if (!chunk) {
+        ESP_LOGE(TAG, "Failed to allocate memory for %s", filename);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    size_t total_written = 0;
+    uint32_t current_offset = flash_offset;
+    
+    while (total_written < content_length) {
+        size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
+        int read_len = esp_http_client_read(client, (char*)chunk, to_read);
         
-        if (latest_version) {
-            ESP_LOGI(TAG, "Latest version: %s", latest_version);
-            return latest_version;
+        if (read_len <= 0) {
+            ESP_LOGE(TAG, "Failed to read chunk for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
         }
+        
+        // Write chunk to flash
+        if (!write_to_flash(current_offset, chunk, read_len)) {
+            ESP_LOGE(TAG, "Failed to write chunk to flash for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        total_written += read_len;
+        current_offset += read_len;
+        
+        ESP_LOGI(TAG, "Progress: %d/%d bytes (%d%%)", total_written, content_length, 
+                 (total_written * 100) / content_length);
     }
     
-    ESP_LOGE(TAG, "Failed after %d retries", max_retries);
-    return NULL;
+    free(chunk);
+    esp_http_client_cleanup(client);
+    
+    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%d bytes)", filename, content_length);
+    return true;
 }
 
-// Simple semantic version comparison (major.minor.patch)
-bool is_newer_version(const char *current, const char *latest) {
-    if (!current || !latest) return false;
-    
-    int cur_major, cur_minor, cur_patch;
-    int lat_major, lat_minor, lat_patch;
-    
-    if (sscanf(current, "%d.%d.%d", &cur_major, &cur_minor, &cur_patch) != 3 ||
-        sscanf(latest, "%d.%d.%d", &lat_major, &lat_minor, &lat_patch) != 3) {
-        return strcmp(current, latest) != 0;  // Fallback to string compare
-    }
-    
-    if (lat_major > cur_major) return true;
-    if (lat_major == cur_major && lat_minor > cur_minor) return true;
-    if (lat_major == cur_major && lat_minor == cur_minor && lat_patch > cur_patch) return true;
-    
-    return false;
-}
-
-bool should_update(void) {
-    const esp_app_desc_t *running_app = esp_ota_get_app_description();
-    ESP_LOGI(TAG, "Running version: %s", running_app->version);
-    
-    char *latest_version = get_latest_version();
-    if (!latest_version) return false;
-    
-    bool update_needed = is_newer_version(running_app->version, latest_version);
-    ESP_LOGI(TAG, "Update %sneeded (latest: %s)", update_needed ? "" : "not ", latest_version);
-    
-    free(latest_version);
-    return update_needed;
-}
-
-// Update firmware using standard OTA with HTTPS
+// Update firmware using standard OTA mechanism
 bool update_firmware(void) {
     ESP_LOGI(TAG, "Updating firmware using OTA...");
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
         .timeout_ms = 120000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     
     esp_https_ota_config_t ota_config = {
@@ -252,18 +366,66 @@ bool update_firmware(void) {
     
     esp_err_t ret = esp_https_ota(&ota_config);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "OTA successful!");
+        ESP_LOGI(TAG, "Firmware OTA update successful!");
         return true;
     } else {
-        ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Firmware OTA update failed: %s", esp_err_to_name(ret));
         return false;
     }
 }
 
+bool is_newer_version(const char *current, const char *latest) {
+    ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
+    return strcmp(current, latest) != 0;
+}
+
+bool should_update(void) {
+    ESP_LOGI(TAG, "Checking if update needed...");
+    
+    const esp_app_desc_t *running_app = esp_ota_get_app_description();
+    ESP_LOGI(TAG, "Currently running: %s", running_app->version);
+    
+    char *latest_version = get_latest_version();
+    if (!latest_version) {
+        ESP_LOGE(TAG, "Failed to get latest version from GitHub");
+        return false;
+    }
+    
+    bool update_needed = is_newer_version(running_app->version, latest_version);
+    
+    if (update_needed) {
+        ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
+                 running_app->version, latest_version);
+    } else {
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
+    }
+    
+    free(latest_version);
+    return update_needed;
+}
+
 void perform_ota_update(void) {
-    // Only update app firmware (no bootloader/partition)
-    if (update_firmware()) {
-        ESP_LOGI(TAG, "Update complete! Rebooting...");
+    ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
+    
+    // Step 1: Update bootloader (if changed)
+    ESP_LOGI(TAG, "Step 1: Updating bootloader...");
+    bool bootloader_ok = download_and_flash_binary(BOOTLOADER_BIN_URL, "bootloader.bin", BOOTLOADER_OFFSET);
+    
+    // Step 2: Update partition table (if changed)
+    ESP_LOGI(TAG, "Step 2: Updating partition table...");
+    bool partition_ok = download_and_flash_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin", PARTITION_TABLE_OFFSET);
+    
+    // Step 3: Update firmware using standard OTA mechanism
+    ESP_LOGI(TAG, "Step 3: Updating firmware...");
+    bool firmware_ok = update_firmware();
+    
+    if (firmware_ok) {
+        ESP_LOGI(TAG, "All updates completed successfully!");
+        ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
+                 bootloader_ok ? "OK" : "Failed", 
+                 partition_ok ? "OK" : "Failed",
+                 firmware_ok ? "OK" : "OK");
+        
         // Success blinking
         for(int i = 0; i < 20; i++) {
             gpio_set_level(BLINK_GPIO, 1);
@@ -271,10 +433,14 @@ void perform_ota_update(void) {
             gpio_set_level(BLINK_GPIO, 0);
             vTaskDelay(50 / portTICK_PERIOD_MS);
         }
+        
+        ESP_LOGI(TAG, "Rebooting to apply updates...");
         vTaskDelay(3000 / portTICK_PERIOD_MS);
         esp_restart();
+        
     } else {
-        ESP_LOGE(TAG, "Update failed!");
+        ESP_LOGE(TAG, "Firmware update failed!");
+        
         // Error blinking
         for(int i = 0; i < 10; i++) {
             gpio_set_level(BLINK_GPIO, 1);
