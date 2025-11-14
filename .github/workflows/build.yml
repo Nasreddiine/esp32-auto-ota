@@ -3,8 +3,6 @@ name: Build and Release ESP32 Firmware
 on:
   push:
     branches: [ main ]
-  release:
-    types: [published]
 
 jobs:
   build-and-release:
@@ -15,10 +13,13 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
 
-    - name: Setup ESP-IDF
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install ESP-IDF
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v5.1.1
@@ -26,19 +27,13 @@ jobs:
 
     - name: Build project
       run: |
-        source $IDF_PATH/export.sh
         idf.py build
 
-    - name: Extract version from project
+    - name: Extract version
       id: version
       run: |
-        # First try to get version from root CMakeLists.txt
-        if [ -f "CMakeLists.txt" ]; then
-          VERSION=$(grep -oP 'set\(PROJECT_VER "\K[^"]*' CMakeLists.txt || echo "1.0.0")
-        else
-          # Fallback to main component CMakeLists.txt
-          VERSION=$(grep -oP 'set\(COMPONENT_VER "\K[^"]*' main/CMakeLists.txt || echo "1.0.0")
-        fi
+        # Get version from root CMakeLists.txt
+        VERSION=$(grep -oP 'set\(PROJECT_VER "\K[^"]*' CMakeLists.txt || echo "1.0.0")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Detected version: $VERSION"
 
@@ -46,51 +41,36 @@ jobs:
       run: |
         mkdir -p firmware-release
         
-        # Copy essential binary files
+        # Copy binary files
         cp build/bootloader/bootloader.bin firmware-release/
         cp build/partition_table/partition-table.bin firmware-release/
         
-        # The main application binary name depends on your project name
-        # Try common naming patterns
+        # Copy main application binary
         PROJECT_NAME=$(grep -oP 'project\(\K[^\)]+' CMakeLists.txt | head -1 | tr -d ' ' || echo "esp32_auto_ota")
         echo "Project name: $PROJECT_NAME"
         
-        # Look for the main firmware binary
         if [ -f "build/${PROJECT_NAME}.bin" ]; then
           cp "build/${PROJECT_NAME}.bin" firmware-release/firmware.bin
-        elif [ -f "build/esp32-auto-ota.bin" ]; then
-          cp build/esp32-auto-ota.bin firmware-release/firmware.bin
-        elif [ -f "build/esp32_auto_ota.bin" ]; then
-          cp build/esp32_auto_ota.bin firmware-release/firmware.bin
+          echo "Found firmware: build/${PROJECT_NAME}.bin"
         else
-          # Last resort: find any main application binary
-          find build/ -name "*.bin" -not -name "bootloader.bin" -not -name "partition-table.bin" | head -1 | xargs -I {} cp {} firmware-release/firmware.bin
+          # Fallback: look for any main app binary
+          find build/ -maxdepth 1 -name "*.bin" -not -name "bootloader.bin" -not -name "partition-table.bin" | head -1 | xargs -I {} cp {} firmware-release/firmware.bin
+          echo "Used fallback method to find firmware"
         fi
         
-        # Verify all required files exist
-        echo "=== Verifying firmware files ==="
+        # Verify files
+        echo "=== Firmware files ==="
         ls -la firmware-release/
         
         if [ ! -f "firmware-release/firmware.bin" ]; then
           echo "ERROR: firmware.bin not found!"
-          echo "Available files in build directory:"
+          echo "Available files:"
           find build/ -name "*.bin" -type f
-          exit 1
-        fi
-        
-        if [ ! -f "firmware-release/bootloader.bin" ]; then
-          echo "ERROR: bootloader.bin not found!"
-          exit 1
-        fi
-        
-        if [ ! -f "firmware-release/partition-table.bin" ]; then
-          echo "ERROR: partition-table.bin not found!"
           exit 1
         fi
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       with:
         tag_name: v${{ steps.version.outputs.version }}
         name: Release v${{ steps.version.outputs.version }}
@@ -101,16 +81,12 @@ jobs:
           **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           **Target:** ESP32
           
-          ## Firmware Files
-          
-          - `firmware.bin` - Main application firmware
+          ## Files
+          - `firmware.bin` - Main application
           - `bootloader.bin` - Bootloader  
           - `partition-table.bin` - Partition table
           
-          ## Flashing Instructions
-          
-          You can flash these files using esptool.py:
-          
+          ## Flash Manually
           ```bash
           esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 921600 \
             --before default_reset --after hard_reset write_flash \
@@ -119,16 +95,6 @@ jobs:
             0x8000 partition-table.bin \
             0x10000 firmware.bin
           ```
-          
-          ## OTA Update
-          
-          This firmware supports automatic OTA updates from GitHub releases.
         files: firmware-release/*
         draft: false
         prerelease: false
-
-    - name: Upload release assets
-      if: github.event_name == 'release' && github.event.action == 'published'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: firmware-release/*
