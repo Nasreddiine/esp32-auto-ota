@@ -17,4 +17,5 @@ idf_component_register(
         mbedtls
 )
 
-set(COMPONENT_VER "1.0.0")
+set(COMPONENT_VER "1.0.1")
+
