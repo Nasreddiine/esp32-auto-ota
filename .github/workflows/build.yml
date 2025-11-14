@@ -14,12 +14,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-
-    - name: Install ESP-IDF
+    - name: Setup ESP-IDF
       uses: espressif/esp-idf-ci-action@v1
       with:
         esp_idf_version: v5.1.1
@@ -27,47 +22,25 @@ jobs:
 
     - name: Build project
       run: |
+        . $IDF_PATH/export.sh
         idf.py build
 
     - name: Extract version
       id: version
       run: |
-        # Get version from root CMakeLists.txt
-        VERSION=$(grep -oP 'set\(PROJECT_VER "\K[^"]*' CMakeLists.txt || echo "1.0.0")
+        VERSION=$(grep 'set(PROJECT_VER' CMakeLists.txt | cut -d'"' -f2 || echo "1.0.0")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Detected version: $VERSION"
 
     - name: Prepare firmware files
       run: |
         mkdir -p firmware-release
-        
-        # Copy binary files
         cp build/bootloader/bootloader.bin firmware-release/
         cp build/partition_table/partition-table.bin firmware-release/
+        cp build/esp32_auto_ota.bin firmware-release/firmware.bin
         
-        # Copy main application binary
-        PROJECT_NAME=$(grep -oP 'project\(\K[^\)]+' CMakeLists.txt | head -1 | tr -d ' ' || echo "esp32_auto_ota")
-        echo "Project name: $PROJECT_NAME"
-        
-        if [ -f "build/${PROJECT_NAME}.bin" ]; then
-          cp "build/${PROJECT_NAME}.bin" firmware-release/firmware.bin
-          echo "Found firmware: build/${PROJECT_NAME}.bin"
-        else
-          # Fallback: look for any main app binary
-          find build/ -maxdepth 1 -name "*.bin" -not -name "bootloader.bin" -not -name "partition-table.bin" | head -1 | xargs -I {} cp {} firmware-release/firmware.bin
-          echo "Used fallback method to find firmware"
-        fi
-        
-        # Verify files
         echo "=== Firmware files ==="
         ls -la firmware-release/
-        
-        if [ ! -f "firmware-release/firmware.bin" ]; then
-          echo "ERROR: firmware.bin not found!"
-          echo "Available files:"
-          find build/ -name "*.bin" -type f
-          exit 1
-        fi
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
