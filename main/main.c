@@ -18,11 +18,10 @@
 #include "esp_partition.h"
 #include "esp_image_format.h"
 #include "esp_flash_partitions.h"
-#include "bootloader_config.h"
 #include "esp_efuse.h"
 #include "esp_tls.h"
 
-// WiFi Configuration - UPDATED WITH YOUR CREDENTIALS
+// WiFi Configuration
 #define WIFI_SSID "La_Fibre_dOrange_A516"
 #define WIFI_PASS "Z45CSFFXX3TU6EGNT4"
 
@@ -46,31 +45,6 @@ static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
 // Let's Encrypt root certificate (works with GitHub)
-static const char *ROOT_CERT = \
-"-----BEGIN CERTIFICATE-----\n" \
-"MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n" \
-"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n" \
-"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n" \
-"QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n" \
-"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n" \
-"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n" \
-"9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n" \
-"CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n" \
-"nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n" \
-"43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n" \
-"T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n" \
-"gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n" \
-"BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n" \
-"TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n" \
-"DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n" \
-"hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n" \
-"06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n" \
-"PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n" \
-"YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk\n" \
-"CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=\n" \
-"-----END CERTIFICATE-----\n";
-
-// Alternative: ISRG Root X1 (Let's Encrypt)
 static const char *ISRG_ROOT_X1 = \
 "-----BEGIN CERTIFICATE-----\n" \
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
@@ -228,7 +202,7 @@ char* get_latest_version(void) {
     
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
-        .cert_pem = ISRG_ROOT_X1,  // Using Let's Encrypt certificate
+        .cert_pem = ISRG_ROOT_X1,
         .timeout_ms = 30000,
         .buffer_size = 2048,
     };
@@ -261,10 +235,9 @@ char* get_latest_version(void) {
     
     int content_length = esp_http_client_fetch_headers(client);
     if (content_length <= 0) {
-        content_length = 2048;  // Default size
+        content_length = 2048;
     }
     
-    // Limit content length to prevent memory issues
     if (content_length > 4096) {
         content_length = 4096;
     }
@@ -307,7 +280,7 @@ bool update_firmware(void) {
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
-        .cert_pem = ISRG_ROOT_X1,  // Using Let's Encrypt certificate
+        .cert_pem = ISRG_ROOT_X1,
         .timeout_ms = 120000,
         .buffer_size = 2048,
         .buffer_size_tx = 2048,
@@ -334,7 +307,6 @@ bool update_firmware(void) {
 bool is_newer_version(const char *current, const char *latest) {
     ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
     
-    // Simple string comparison - if they're different, we consider it newer
     if (strcmp(current, latest) != 0) {
         ESP_LOGI(TAG, "New version available!");
         return true;
@@ -374,7 +346,6 @@ void blink_led_pattern(int times, int delay_ms) {
 void perform_ota_update(void) {
     ESP_LOGI(TAG, "Starting OTA update...");
     
-    // Blink rapidly to indicate update starting
     blink_led_pattern(10, 100);
     
     bool update_success = update_firmware();
@@ -382,7 +353,6 @@ void perform_ota_update(void) {
     if (update_success) {
         ESP_LOGI(TAG, "OTA update completed successfully!");
         
-        // Success pattern
         for(int i = 0; i < 5; i++) {
             gpio_set_level(BLINK_GPIO, 1);
             vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -397,7 +367,6 @@ void perform_ota_update(void) {
     } else {
         ESP_LOGE(TAG, "OTA update failed!");
         
-        // Error pattern
         for(int i = 0; i < 3; i++) {
             gpio_set_level(BLINK_GPIO, 1);
             vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -440,13 +409,10 @@ void app_main(void) {
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "WiFi connected successfully!");
         
-        // Blink twice to indicate WiFi connected
         blink_led_pattern(2, 200);
         
-        // Sync time (important for HTTPS)
         sync_time();
         
-        // Initial update check
         if (should_update()) {
             ESP_LOGI(TAG, "Update available! Starting OTA...");
             blink_led_pattern(5, 200);
@@ -460,10 +426,8 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Starting main application loop - Version 1.0.0");
     
-    // Main loop
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.0: Single blink every 3 seconds
         gpio_set_level(BLINK_GPIO, 1);
         vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
@@ -471,7 +435,6 @@ void app_main(void) {
         
         seconds_counter += 3;
         
-        // Check for updates every UPDATE_CHECK_INTERVAL_SECONDS
         if (seconds_counter >= UPDATE_CHECK_INTERVAL_SECONDS) {
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
@@ -479,10 +442,9 @@ void app_main(void) {
                 blink_led_pattern(8, 150);
                 perform_ota_update();
             }
-            seconds_counter = 0;  // Reset counter
+            seconds_counter = 0;
         }
         
-        // Show status every 30 seconds
         if (seconds_counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
                      running_app->version, seconds_counter);
