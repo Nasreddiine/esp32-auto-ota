@@ -379,12 +379,12 @@ void perform_ota_update(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.1 ==="); // CHANGED FROM 1.0.0
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
     ESP_LOGI(TAG, "WiFi SSID: %s", WIFI_SSID);
-    ESP_LOGI(TAG, "Update check interval: %d seconds (2.5 minutes)", UPDATE_CHECK_INTERVAL_SECONDS); // Updated log message
+    ESP_LOGI(TAG, "Update check interval: %d seconds (2.5 minutes)", UPDATE_CHECK_INTERVAL_SECONDS);
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -455,3 +455,4 @@ void app_main(void) {
         }
     }
 }
+
