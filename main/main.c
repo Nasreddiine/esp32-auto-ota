@@ -19,7 +19,6 @@
 #include "esp_image_format.h"
 #include "esp_flash_partitions.h"
 #include "esp_efuse.h"
-#include "esp_tls.h"
 
 // WiFi Configuration
 #define WIFI_SSID "La_Fibre_dOrange_A516"
@@ -48,7 +47,7 @@ const int WIFI_CONNECTED_BIT = BIT0;
 static const char *ISRG_ROOT_X1 = \
 "-----BEGIN CERTIFICATE-----\n" \
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
-"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n" \
+"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFS2VjdXJpdHkgUmVzZWF\n" \
 "cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n" \
 "WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n" \
 "ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n" \
