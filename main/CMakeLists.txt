@@ -1,3 +1,4 @@
+
 idf_component_register(
     SRCS 
         "main.c"
@@ -15,6 +16,7 @@ idf_component_register(
         bootloader_support
         efuse
         mbedtls
+        esp_tls
 )
 
 set(COMPONENT_VER "1.0.0")
