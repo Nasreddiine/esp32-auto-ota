@@ -15,7 +15,6 @@ idf_component_register(
         bootloader_support
         efuse
         mbedtls
-        json
 )
 
 set(COMPONENT_VER "1.0.0")
