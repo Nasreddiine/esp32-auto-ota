@@ -15,7 +15,6 @@ idf_component_register(
         bootloader_support
         efuse
         mbedtls
-        esp_crt_bundle
 )
 
 set(COMPONENT_VER "1.0.0")
