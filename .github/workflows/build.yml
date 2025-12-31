@@ -24,9 +24,15 @@ jobs:
         target: esp32
 
     - name: Build firmware
+      id: build
       run: |
-        source $IDF_PATH/export.sh
+        # Initialize the project
+        idf.py set-target esp32
+        # Build the project
         idf.py build
+        # List the build directory to verify
+        echo "=== Build directory contents ==="
+        find build -name "*.bin" -type f
 
     - name: Extract version
       id: version
@@ -41,7 +47,11 @@ jobs:
         # Look for the main application binary
         echo "=== Searching for firmware binary ==="
         
-        # Common patterns for the main application binary
+        # List all binaries to help debug
+        echo "Available .bin files in build directory:"
+        find build -name "*.bin" -type f
+        
+        # Try to find the app binary by excluding common files
         if [ -f "build/esp32_auto_ota.bin" ]; then
           cp build/esp32_auto_ota.bin firmware.bin
           echo "Found: esp32_auto_ota.bin"
@@ -52,17 +62,17 @@ jobs:
           cp build/main.bin firmware.bin
           echo "Found: main.bin"
         else
-          # List all binaries to help debug
-          echo "Available .bin files in build directory:"
-          find build -name "*.bin" -type f
-          
-          # Try to find the app binary by excluding common files
+          # Look for any .bin file that's not bootloader, partition-table, or ota_data
           APP_BIN=$(find build -name "*.bin" -type f | grep -v bootloader | grep -v partition-table | grep -v ota_data | head -1)
-          if [ -n "$APP_BIN" ]; then
+          if [ -n "$APP_BIN" ] && [ -f "$APP_BIN" ]; then
             cp "$APP_BIN" firmware.bin
             echo "Found: $(basename $APP_BIN)"
           else
             echo "ERROR: Could not find main application binary!"
+            echo "Available files in build/:"
+            ls -la build/
+            echo "Available files in build subdirectories:"
+            find build -type f -name "*.bin"
             exit 1
           fi
         fi
@@ -70,6 +80,7 @@ jobs:
         # Verify the file exists and get its size
         if [ -f "firmware.bin" ]; then
           echo "Firmware size: $(ls -lh firmware.bin | awk '{print $5}')"
+          echo "Firmware created successfully!"
         else
           echo "ERROR: firmware.bin was not created!"
           exit 1
