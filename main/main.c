@@ -21,9 +21,9 @@
 #include "esp_efuse.h"
 #include "esp_crt_bundle.h"
 
-// WiFi Configuration
-#define WIFI_SSID "La_Fibre_dOrange_A516"
-#define WIFI_PASS "Z45CSFFXX3TU6EGNT4"
+// WiFi Configuration - CHANGED
+#define WIFI_SSID "deff"
+#define WIFI_PASS "goodgame"
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -38,6 +38,11 @@
 // GitHub URLs - Using HTTPS
 #define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
 #define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+
+// Application Version - MUST match CMakeLists.txt
+#ifndef APP_VERSION
+#define APP_VERSION "1.0.0"
+#endif
 
 static const char *TAG = "OTA_APP";
 
@@ -353,7 +358,7 @@ void perform_ota_update(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version %s ===", APP_VERSION);
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
@@ -402,16 +407,17 @@ void app_main(void) {
         ESP_LOGE(TAG, "Failed to connect to WiFi");
     }
     
-    ESP_LOGI(TAG, "Starting main application loop - Version 1.0.0");
+    ESP_LOGI(TAG, "Starting main application loop - Version %s", APP_VERSION);
     
     int seconds_counter = 0;
     while (1) {
+        // Version 1.0.0: 2 seconds ON, 2 seconds OFF
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);  // 2 seconds ON
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2800 / portTICK_PERIOD_MS);
+        vTaskDelay(2000 / portTICK_PERIOD_MS);  // 2 seconds OFF
         
-        seconds_counter += 3;
+        seconds_counter += 4;  // Total cycle: 4 seconds (2s on + 2s off)
         
         if (seconds_counter >= UPDATE_CHECK_INTERVAL_SECONDS) {
             ESP_LOGI(TAG, "Periodic update check...");
@@ -423,6 +429,7 @@ void app_main(void) {
             seconds_counter = 0;
         }
         
+        // Log status every 30 seconds
         if (seconds_counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
                      running_app->version, seconds_counter);
