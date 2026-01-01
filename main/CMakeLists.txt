@@ -14,5 +14,6 @@ idf_component_register(
         esp_partition
         bootloader_support
         efuse
-        mbedtls
 )
+
+set(COMPONENT_VER "1.0.0")
