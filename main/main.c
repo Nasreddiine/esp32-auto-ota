@@ -18,12 +18,12 @@
 #include "esp_partition.h"
 #include "esp_image_format.h"
 #include "esp_flash_partitions.h"
+#include "bootloader_config.h"
 #include "esp_efuse.h"
-#include "esp_crt_bundle.h"
 
-// WiFi Configuration - CHANGED
-#define WIFI_SSID "deff"
-#define WIFI_PASS "goodgame"
+// WiFi Configuration
+#define WIFI_SSID "INPT-Residence"
+#define WIFI_PASS "iinnpptt"
 
 // LED Configuration
 #define BLINK_GPIO GPIO_NUM_2
@@ -32,24 +32,25 @@
 #define GITHUB_USER "Nasreddiine"
 #define GITHUB_REPO "esp32-auto-ota"
 
-// Update check interval (2.5 minutes = 150 seconds)
-#define UPDATE_CHECK_INTERVAL_SECONDS 150
+// Update check interval (1 minute 30 seconds = 90 seconds)
+#define UPDATE_CHECK_INTERVAL_SECONDS 90
 
-// GitHub URLs - Using HTTPS
-#define GITHUB_API_URL "https://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
-#define FIRMWARE_BIN_URL "https://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+// GitHub URLs - Using HTTP to avoid certificate issues
+#define GITHUB_API_URL "http://api.github.com/repos/" GITHUB_USER "/" GITHUB_REPO "/releases/latest"
+#define FIRMWARE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+#define BOOTLOADER_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/bootloader.bin"
+#define PARTITION_TABLE_BIN_URL "http://github.com/" GITHUB_USER "/" GITHUB_REPO "/releases/latest/download/partition-table.bin"
 
-// Application Version - MUST match CMakeLists.txt
-#ifndef APP_VERSION
-#define APP_VERSION "1.0.0"
-#endif
+// Partition addresses (typical for ESP32)
+#define BOOTLOADER_OFFSET 0x1000
+#define PARTITION_TABLE_OFFSET 0x8000
 
 static const char *TAG = "OTA_APP";
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// Sync time with more retries
+// Sync time
 void sync_time(void) {
     ESP_LOGI(TAG, "Setting time from SNTP");
     setenv("TZ", "UTC", 1);
@@ -64,7 +65,7 @@ void sync_time(void) {
     sntp_init();
     
     int retry = 0;
-    const int retry_count = 30;
+    const int retry_count = 15;
     
     while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
@@ -73,15 +74,6 @@ void sync_time(void) {
     
     if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
         ESP_LOGI(TAG, "Time synchronized successfully!");
-        
-        // Print current time for verification
-        time_t now;
-        struct tm timeinfo;
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        ESP_LOGI(TAG, "Current time: %04d-%02d-%02d %02d:%02d:%02d",
-                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
     } else {
         ESP_LOGW(TAG, "Time synchronization failed");
         struct timeval tv = {
@@ -93,18 +85,14 @@ void sync_time(void) {
     }
 }
 
-// WiFi event handler
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "WiFi disconnected, attempting to reconnect...");
         esp_wifi_connect();
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -136,14 +124,13 @@ void wifi_init(void) {
         .sta = {
             .ssid = WIFI_SSID,
             .password = WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "WiFi started, connecting to: %s", WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi started");
 }
 
 // Simple string extraction for version from JSON
@@ -177,15 +164,13 @@ char* extract_version_from_json(const char* json_response) {
     return version;
 }
 
-// Get latest version from GitHub API using HTTPS with certificate bundle
+// Get latest version from GitHub API using HTTP
 char* get_latest_version(void) {
     ESP_LOGI(TAG, "Fetching latest version from GitHub...");
     
     esp_http_client_config_t config = {
         .url = GITHUB_API_URL,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 15000,
-        .buffer_size = 2048,
+        .timeout_ms = 20000,
     };
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -198,9 +183,9 @@ char* get_latest_version(void) {
     esp_http_client_set_header(client, "User-Agent", "ESP32-OTA-Client");
     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
     
-    esp_err_t err = esp_http_client_open(client, 0);
+    esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
         return NULL;
     }
@@ -214,13 +199,13 @@ char* get_latest_version(void) {
         return NULL;
     }
     
-    int content_length = esp_http_client_fetch_headers(client);
+    int content_length = esp_http_client_get_content_length(client);
     if (content_length <= 0) {
-        content_length = 2048;
+        content_length = 4096;
     }
     
-    if (content_length > 4096) {
-        content_length = 4096;
+    if (content_length > 8192) {
+        content_length = 8192;
     }
     
     char *response = malloc(content_length + 1);
@@ -239,7 +224,6 @@ char* get_latest_version(void) {
     }
     
     response[read_len] = '\0';
-    ESP_LOGD(TAG, "Response: %s", response);
     
     esp_http_client_cleanup(client);
     
@@ -255,16 +239,123 @@ char* get_latest_version(void) {
     return latest_version;
 }
 
-// Update firmware using standard OTA mechanism with HTTPS and certificate bundle
+// Write data to flash at specific offset
+bool write_to_flash(uint32_t offset, const uint8_t* data, size_t size) {
+    ESP_LOGI(TAG, "Writing %d bytes to flash at offset 0x%x", size, offset);
+    
+    esp_err_t err = esp_partition_erase_range(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                                      NULL), 
+                                             offset, 
+                                             (size + 4095) & ~4095); // Align to 4KB
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to erase flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    err = esp_partition_write(esp_partition_find_first(ESP_PARTITION_TYPE_APP, 
+                                                      ESP_PARTITION_SUBTYPE_ANY, 
+                                                      NULL), 
+                             offset, data, size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write to flash: %s", esp_err_to_name(err));
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Successfully wrote to flash");
+    return true;
+}
+
+// Download and flash a binary file
+bool download_and_flash_binary(const char* url, const char* filename, uint32_t flash_offset) {
+    ESP_LOGI(TAG, "Downloading and flashing %s from %s to 0x%x", filename, url, flash_offset);
+    
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 120000,
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client for %s", filename);
+        return false;
+    }
+    
+    esp_http_client_set_method(client, HTTP_METHOD_GET);
+    
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection for %s: %s", filename, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int status_code = esp_http_client_get_status_code(client);
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request for %s failed with status: %d", filename, status_code);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int content_length = esp_http_client_fetch_headers(client);
+    if (content_length <= 0) {
+        ESP_LOGE(TAG, "Invalid content length for %s: %d", filename, content_length);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    // Read and flash in chunks to handle large files
+    const size_t chunk_size = 4096;
+    uint8_t* chunk = malloc(chunk_size);
+    if (!chunk) {
+        ESP_LOGE(TAG, "Failed to allocate memory for %s", filename);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    size_t total_written = 0;
+    uint32_t current_offset = flash_offset;
+    
+    while (total_written < content_length) {
+        size_t to_read = (content_length - total_written) > chunk_size ? chunk_size : (content_length - total_written);
+        int read_len = esp_http_client_read(client, (char*)chunk, to_read);
+        
+        if (read_len <= 0) {
+            ESP_LOGE(TAG, "Failed to read chunk for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        // Write chunk to flash
+        if (!write_to_flash(current_offset, chunk, read_len)) {
+            ESP_LOGE(TAG, "Failed to write chunk to flash for %s", filename);
+            free(chunk);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        total_written += read_len;
+        current_offset += read_len;
+        
+        ESP_LOGI(TAG, "Progress: %d/%d bytes (%d%%)", total_written, content_length, 
+                 (total_written * 100) / content_length);
+    }
+    
+    free(chunk);
+    esp_http_client_cleanup(client);
+    
+    ESP_LOGI(TAG, "Successfully downloaded and flashed %s (%d bytes)", filename, content_length);
+    return true;
+}
+
+// Update firmware using standard OTA mechanism
 bool update_firmware(void) {
-    ESP_LOGI(TAG, "Starting firmware update from: %s", FIRMWARE_BIN_URL);
+    ESP_LOGI(TAG, "Updating firmware using OTA...");
     
     esp_http_client_config_t config = {
         .url = FIRMWARE_BIN_URL,
-        .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 120000,
-        .buffer_size = 2048,
-        .buffer_size_tx = 2048,
     };
     
     esp_https_ota_config_t ota_config = {
@@ -273,9 +364,7 @@ bool update_firmware(void) {
         .partial_http_download = false,
     };
     
-    ESP_LOGI(TAG, "Starting HTTPS OTA...");
     esp_err_t ret = esp_https_ota(&ota_config);
-    
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Firmware OTA update successful!");
         return true;
@@ -287,14 +376,7 @@ bool update_firmware(void) {
 
 bool is_newer_version(const char *current, const char *latest) {
     ESP_LOGI(TAG, "Comparing versions: current=%s, latest=%s", current, latest);
-    
-    if (strcmp(current, latest) != 0) {
-        ESP_LOGI(TAG, "New version available!");
-        return true;
-    }
-    
-    ESP_LOGI(TAG, "Already running the latest version");
-    return false;
+    return strcmp(current, latest) != 0;
 }
 
 bool should_update(void) {
@@ -305,14 +387,68 @@ bool should_update(void) {
     
     char *latest_version = get_latest_version();
     if (!latest_version) {
-        ESP_LOGW(TAG, "Failed to get latest version from GitHub - will try again later");
+        ESP_LOGE(TAG, "Failed to get latest version from GitHub");
         return false;
     }
     
     bool update_needed = is_newer_version(running_app->version, latest_version);
     
+    if (update_needed) {
+        ESP_LOGI(TAG, "Update needed: running %s, latest is %s", 
+                 running_app->version, latest_version);
+    } else {
+        ESP_LOGI(TAG, "No update needed - running latest version %s", latest_version);
+    }
+    
     free(latest_version);
     return update_needed;
+}
+
+void perform_ota_update(void) {
+    ESP_LOGI(TAG, "Starting complete OTA update from GitHub...");
+    
+    // Step 1: Update bootloader (if changed)
+    ESP_LOGI(TAG, "Step 1: Updating bootloader...");
+    bool bootloader_ok = download_and_flash_binary(BOOTLOADER_BIN_URL, "bootloader.bin", BOOTLOADER_OFFSET);
+    
+    // Step 2: Update partition table (if changed)
+    ESP_LOGI(TAG, "Step 2: Updating partition table...");
+    bool partition_ok = download_and_flash_binary(PARTITION_TABLE_BIN_URL, "partition-table.bin", PARTITION_TABLE_OFFSET);
+    
+    // Step 3: Update firmware using standard OTA mechanism
+    ESP_LOGI(TAG, "Step 3: Updating firmware...");
+    bool firmware_ok = update_firmware();
+    
+    if (firmware_ok) {
+        ESP_LOGI(TAG, "All updates completed successfully!");
+        ESP_LOGI(TAG, "Bootloader: %s, Partition: %s, Firmware: %s",
+                 bootloader_ok ? "OK" : "Failed", 
+                 partition_ok ? "OK" : "Failed",
+                 firmware_ok ? "OK" : "OK");
+        
+        // Success blinking
+        for(int i = 0; i < 20; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+        }
+        
+        ESP_LOGI(TAG, "Rebooting to apply updates...");
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        esp_restart();
+        
+    } else {
+        ESP_LOGE(TAG, "Firmware update failed!");
+        
+        // Error blinking
+        for(int i = 0; i < 10; i++) {
+            gpio_set_level(BLINK_GPIO, 1);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            gpio_set_level(BLINK_GPIO, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
+    }
 }
 
 void blink_led_pattern(int times, int delay_ms) {
@@ -324,46 +460,12 @@ void blink_led_pattern(int times, int delay_ms) {
     }
 }
 
-void perform_ota_update(void) {
-    ESP_LOGI(TAG, "Starting OTA update...");
-    
-    blink_led_pattern(10, 100);
-    
-    bool update_success = update_firmware();
-    
-    if (update_success) {
-        ESP_LOGI(TAG, "OTA update completed successfully!");
-        
-        for(int i = 0; i < 5; i++) {
-            gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-            gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-        }
-        
-        ESP_LOGI(TAG, "Rebooting in 5 seconds...");
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
-        esp_restart();
-        
-    } else {
-        ESP_LOGE(TAG, "OTA update failed!");
-        
-        for(int i = 0; i < 3; i++) {
-            gpio_set_level(BLINK_GPIO, 1);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-            gpio_set_level(BLINK_GPIO, 0);
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-        }
-    }
-}
-
 void app_main(void) {
-    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version %s ===", APP_VERSION);
+    ESP_LOGI(TAG, "=== ESP32 GitHub Auto-OTA Version 1.0.0 ===");
     
     const esp_app_desc_t *running_app = esp_ota_get_app_description();
     ESP_LOGI(TAG, "Running version: %s", running_app->version);
-    ESP_LOGI(TAG, "WiFi SSID: %s", WIFI_SSID);
-    ESP_LOGI(TAG, "Update check interval: %d seconds (2.5 minutes)", UPDATE_CHECK_INTERVAL_SECONDS);
+    ESP_LOGI(TAG, "Update check interval: %d seconds", UPDATE_CHECK_INTERVAL_SECONDS);
     
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -379,57 +481,44 @@ void app_main(void) {
     
     // Connect to WiFi
     wifi_init();
-    ESP_LOGI(TAG, "Waiting for WiFi connection...");
+    ESP_LOGI(TAG, "Connecting to WiFi...");
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
+    ESP_LOGI(TAG, "WiFi connected!");
     
-    EventBits_t bits = xEventGroupWaitBits(wifi_event_group, 
-                                          WIFI_CONNECTED_BIT, 
-                                          false, 
-                                          true, 
-                                          portMAX_DELAY);
+    // Sync time
+    sync_time();
     
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "WiFi connected successfully!");
-        
-        blink_led_pattern(2, 200);
-        
-        // Sync time (critical for HTTPS)
-        sync_time();
-        
-        // Initial update check
-        if (should_update()) {
-            ESP_LOGI(TAG, "Update available! Starting OTA...");
-            blink_led_pattern(5, 200);
-            perform_ota_update();
-        } else {
-            ESP_LOGI(TAG, "No update needed - running latest version");
-        }
-    } else {
-        ESP_LOGE(TAG, "Failed to connect to WiFi");
+    // Initial update check
+    if (should_update()) {
+        ESP_LOGI(TAG, "Update needed! Starting OTA...");
+        blink_led_pattern(5, 200);
+        perform_ota_update();
     }
     
-    ESP_LOGI(TAG, "Starting main application loop - Version %s", APP_VERSION);
+    ESP_LOGI(TAG, "Starting main application - Single blink pattern (version 1.0.0)");
     
+    // Main loop
     int seconds_counter = 0;
     while (1) {
-        // Version 1.0.0: 2 seconds ON, 2 seconds OFF
+        // Version 1.0.0: Single blink pattern every 3 seconds
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);  // 2 seconds ON
+        vTaskDelay(200 / portTICK_PERIOD_MS);
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);  // 2 seconds OFF
+        vTaskDelay(2800 / portTICK_PERIOD_MS);
         
-        seconds_counter += 4;  // Total cycle: 4 seconds (2s on + 2s off)
+        seconds_counter += 3;
         
-        if (seconds_counter >= UPDATE_CHECK_INTERVAL_SECONDS) {
+        // Check for updates every 90 seconds
+        if (seconds_counter % UPDATE_CHECK_INTERVAL_SECONDS == 0) {
             ESP_LOGI(TAG, "Periodic update check...");
             if (should_update()) {
                 ESP_LOGI(TAG, "Update available! Starting OTA...");
                 blink_led_pattern(8, 150);
                 perform_ota_update();
             }
-            seconds_counter = 0;
         }
         
-        // Log status every 30 seconds
+        // Show status every 30 seconds
         if (seconds_counter % 30 == 0) {
             ESP_LOGI(TAG, "Status: Version %s - Running for %d seconds", 
                      running_app->version, seconds_counter);
