@@ -13,11 +13,9 @@ endif()
 # Set project version to 1.0.0
 set(PROJECT_VER "1.0.0")
 
-# Set project name for binary output
-set(PROJECT_NAME "esp32_auto_ota")
-
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(${PROJECT_NAME})
+project(esp32_auto_ota)
+
 
 
 
