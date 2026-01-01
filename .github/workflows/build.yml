@@ -3,10 +3,9 @@ name: Build and Release ESP32 Firmware
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -14,70 +13,65 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Build with ESP-IDF
+      uses: espressif/esp-idf-ci-action@v1
       with:
-        submodules: recursive
+        esp_idf_version: v5.1.1
+        target: esp32
+        path: ./
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install ESP-IDF
-      run: |
-        python -m pip install --upgrade pip
-        pip install esptool
-        git clone --recursive https://github.com/espressif/esp-idf.git
-        cd esp-idf
-        git checkout v5.1.1
-        ./install.sh esp32
-        . ./export.sh
-
-    - name: Build firmware
-      run: |
-        # Source ESP-IDF environment
-        . /home/runner/esp-idf/export.sh
-        # Build the project
-        idf.py build
-        echo "=== Build output ==="
-        find build -name "*.bin" -type f
-
-    - name: Extract version
+    - name: Extract version from root CMakeLists.txt
       id: version
       run: |
         VERSION=$(grep -oP 'set\(PROJECT_VER "\K[^"]*' CMakeLists.txt || echo "1.0.0")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
+        echo "Detected version: $VERSION"
 
-    - name: Prepare firmware
+    - name: Prepare firmware files
       run: |
-        # Copy the main application binary
-        if [ -f "build/esp32_auto_ota.bin" ]; then
-          cp build/esp32_auto_ota.bin firmware.bin
-        elif [ -f "build/esp32-auto-ota.bin" ]; then
-          cp build/esp32-auto-ota.bin firmware.bin
+        mkdir -p firmware-release
+        
+        # Copy binary files
+        cp build/bootloader/bootloader.bin firmware-release/
+        cp build/partition_table/partition-table.bin firmware-release/
+        
+        # Find and copy the main application binary
+        if [ -f "build/esp32-auto-ota.bin" ]; then
+          cp build/esp32-auto-ota.bin firmware-release/firmware.bin
+        elif [ -f "build/esp32_auto_ota.bin" ]; then
+          cp build/esp32_auto_ota.bin firmware-release/firmware.bin
         else
-          find build -name "*.bin" -type f | grep -v bootloader | grep -v partition-table | grep -v ota_data | head -1 | xargs -I {} cp {} firmware.bin
+          # Use the most common pattern
+          cp build/*.bin firmware-release/firmware.bin 2>/dev/null || true
         fi
         
-        if [ ! -f "firmware.bin" ]; then
-          echo "ERROR: No firmware.bin found!"
-          find build -type f -name "*.bin"
+        # Verify firmware file exists
+        if [ ! -f "firmware-release/firmware.bin" ]; then
+          echo "Looking for firmware file..."
+          find build/ -name "*.bin" -type f
+          echo "ERROR: No firmware.bin file found!"
           exit 1
         fi
-        echo "Firmware ready: $(ls -lh firmware.bin)"
+        
+        echo "=== Files ready for release ==="
+        ls -la firmware-release/
 
-    - name: Create Release
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v${{ steps.version.outputs.version }}
-        name: Release v${{ steps.version.outputs.version }}
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
         body: |
-          ESP32 Auto-OTA Firmware v${{ steps.version.outputs.version }}
-          Built: $(date -u)
-        files: firmware.bin
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware
-        path: firmware.bin
+          # ESP32 Auto-OTA Firmware
+          
+          **Version:** ${{ steps.version.outputs.version }}
+          **Build Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
+          ## Files
+          - `firmware.bin` - Main application
+          - `bootloader.bin` - Bootloader  
+          - `partition-table.bin` - Partition table
+        files: firmware-release/*
+        draft: false
+        prerelease: false
